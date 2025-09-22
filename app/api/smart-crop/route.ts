@@ -3,9 +3,33 @@ import sharp from 'sharp';
 
 export const runtime = 'nodejs';
 
-// Función para detectar focal points inteligentes
-async function detectFocalPoint(imageBuffer: Buffer, width: number, height: number) {
+// Global storage for consistent cropping across batch
+const batchFocalPoints = new Map<string, {x: number, y: number, score: number, secondary?: {x: number, y: number, score: number}}>;
+
+// Generate batch ID from timestamp + random
+function generateBatchId(): string {
+  return `batch_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+}
+
+// Función para detectar focal points inteligentes (puede ser dual)
+async function detectFocalPoint(
+  imageBuffer: Buffer,
+  width: number,
+  height: number,
+  sensitivity: number = 5,
+  protectFaces: boolean = true,
+  dualMode: boolean = false,
+  batchId?: string,
+  useStoredFocalPoint: boolean = false
+): Promise<{x: number, y: number, score: number, secondary?: {x: number, y: number, score: number}}> {
   try {
+    // Si es modo batch consistente, usar focal point almacenado
+    if (useStoredFocalPoint && batchId && batchFocalPoints.has(batchId)) {
+      const stored = batchFocalPoints.get(batchId)!;
+      console.log(`Using stored focal point for batch ${batchId}: (${stored.x}, ${stored.y})`);
+      return stored;
+    }
+
     // Obtener datos de imagen como array con mayor resolución para mejor detección
     const { data } = await sharp(imageBuffer)
       .resize(Math.min(width, 600), Math.min(height, 400), { fit: 'inside' })
@@ -29,7 +53,7 @@ async function detectFocalPoint(imageBuffer: Buffer, width: number, height: numb
     const stepSize = Math.max(4, Math.floor(Math.min(w, h) / 30));
     const regionSize = stepSize * 3;
 
-    let scanResults: Array<{x: number, y: number, score: number}> = [];
+    const scanResults: Array<{x: number, y: number, score: number}> = [];
 
     for (let y = regionSize; y < h - regionSize; y += stepSize) {
       for (let x = regionSize; x < w - regionSize; x += stepSize) {
@@ -43,20 +67,22 @@ async function detectFocalPoint(imageBuffer: Buffer, width: number, height: numb
         const edgeDensity = calculateEdgeDensity(region, regionSize);
         const colorVariance = calculateColorVariance(region);
 
-        // Algoritmo de scoring más agresivo
+        // Algoritmo de scoring ajustable por sensibilidad
         let score = 0;
+        const baseSensitivity = sensitivity / 5.0; // Normalizar a 1.0
 
-        // Priorizar detección de piel con múltiples algoritmos
-        score += skinPixels * 10.0;  // Aumentado de 3.0
+        // Priorizar detección de piel - ajustable por protectFaces
+        const skinWeight = protectFaces ? 12.0 * baseSensitivity : 8.0 * baseSensitivity;
+        score += skinPixels * skinWeight;
 
         // Contraste alto indica rasgos definidos
-        score += contrast * 5.0;     // Aumentado de 2.0
+        score += contrast * (5.0 * baseSensitivity);
 
         // Edges para bordes y definición
-        score += edgeDensity * 3.0;  // Aumentado de 1.5
+        score += edgeDensity * (3.0 * baseSensitivity);
 
         // Varianza de color (diversidad indica complexión)
-        score += colorVariance * 2.0;
+        score += colorVariance * (2.0 * baseSensitivity);
 
         // Bonus por posición vertical favorable (cara típicamente en tercio superior)
         if (y < h * 0.5) {
@@ -95,19 +121,45 @@ async function detectFocalPoint(imageBuffer: Buffer, width: number, height: numb
 
     console.log(`Final focal point: (${finalX}, ${finalY}) with score ${bestScore.toFixed(2)}`);
 
-    return {
+    const result: {x: number, y: number, score: number, secondary?: {x: number, y: number, score: number}} = {
       x: finalX,
       y: finalY,
       score: bestScore
     };
+
+    // Si es modo dual, buscar segundo focal point (producto/objeto)
+    if (dualMode) {
+      const secondaryFocalPoint = detectSecondaryFocalPoint(data, w, h, finalX, finalY, width, height, sensitivity);
+      if (secondaryFocalPoint.score > 1.0) { // Umbral más alto para evitar falsos positivos
+        result.secondary = secondaryFocalPoint;
+        console.log(`Dual mode: Secondary focal point at (${secondaryFocalPoint.x}, ${secondaryFocalPoint.y}) with score ${secondaryFocalPoint.score.toFixed(2)}`);
+      } else {
+        console.log(`Dual mode: No strong secondary focal point found (score: ${secondaryFocalPoint.score.toFixed(2)})`);
+      }
+    }
+
+    // Almacenar para batch consistency
+    if (batchId && !batchFocalPoints.has(batchId)) {
+      batchFocalPoints.set(batchId, result);
+      console.log(`Stored focal point for batch ${batchId}`);
+    }
+
+    return result;
   } catch (error) {
     console.error('Focal point detection error:', error);
     // Fallback al centro
-    return {
+    const fallback = {
       x: Math.floor(width / 2),
       y: Math.floor(height / 2),
       score: 0
     };
+
+    // Almacenar fallback para consistency
+    if (batchId && !batchFocalPoints.has(batchId)) {
+      batchFocalPoints.set(batchId, fallback);
+    }
+
+    return fallback;
   }
 }
 
@@ -308,12 +360,112 @@ function calculateColorVariance(region: Array<{r: number, g: number, b: number}>
   return Math.sqrt(variance) / 255; // Normalizar
 }
 
+// Detectar segundo focal point más simple y robusto
+function detectSecondaryFocalPoint(
+  data: Buffer,
+  resizedWidth: number,
+  resizedHeight: number,
+  primaryX: number,
+  primaryY: number,
+  originalWidth: number,
+  originalHeight: number,
+  sensitivity: number
+): {x: number, y: number, score: number} {
+
+  const scaleX = resizedWidth / originalWidth;
+  const scaleY = resizedHeight / originalHeight;
+  const scaledPrimaryX = Math.floor(primaryX * scaleX);
+  const scaledPrimaryY = Math.floor(primaryY * scaleY);
+
+  let bestScore = 0;
+  let bestX = Math.floor(resizedWidth / 2);
+  let bestY = Math.floor(resizedHeight / 2);
+
+  const stepSize = Math.max(6, Math.floor(Math.min(resizedWidth, resizedHeight) / 20));
+  const regionSize = stepSize * 3;
+  const exclusionRadius = Math.min(resizedWidth, resizedHeight) * 0.2; // 20% del tamaño de imagen
+
+  console.log(`Secondary focal point search: exclusion radius ${exclusionRadius}px around (${scaledPrimaryX}, ${scaledPrimaryY})`);
+
+  for (let y = regionSize; y < resizedHeight - regionSize; y += stepSize) {
+    for (let x = regionSize; x < resizedWidth - regionSize; x += stepSize) {
+      // Evitar área del focal point primario con radio más grande
+      const distanceFromPrimary = Math.sqrt(
+        Math.pow(x - scaledPrimaryX, 2) + Math.pow(y - scaledPrimaryY, 2)
+      );
+
+      if (distanceFromPrimary < exclusionRadius) {
+        continue;
+      }
+
+      const region = extractRegion(data, x - regionSize/2, y - regionSize/2, regionSize, regionSize, resizedWidth, resizedHeight);
+      if (region.length === 0) continue;
+
+      // Detectar objetos: alta varianza de color + edges, baja detección de piel
+      const skinPixels = detectSkinTonesImproved(region);
+      const contrast = calculateContrast(region);
+      const edgeDensity = calculateEdgeDensity(region, regionSize);
+      const colorVariance = calculateColorVariance(region);
+
+      let score = 0;
+      const baseSensitivity = sensitivity / 5.0;
+
+      // Algoritmo simplificado para objetos/productos
+      if (skinPixels < 0.3) { // Poca piel detectada
+        score += contrast * (5.0 * baseSensitivity);
+        score += edgeDensity * (4.0 * baseSensitivity);
+        score += colorVariance * (3.0 * baseSensitivity);
+
+        // Bonus por estar lejos del centro (objetos suelen estar en laterales)
+        const distanceFromCenter = Math.sqrt(
+          Math.pow(x - resizedWidth/2, 2) + Math.pow(y - resizedHeight/2, 2)
+        );
+        const centerDistance = distanceFromCenter / Math.max(resizedWidth, resizedHeight);
+        if (centerDistance > 0.2) {
+          score *= 1.2;
+        }
+      }
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestX = x;
+        bestY = y;
+      }
+    }
+  }
+
+  // Escalar de vuelta al tamaño original
+  const finalX = Math.floor(bestX * (originalWidth / resizedWidth));
+  const finalY = Math.floor(bestY * (originalHeight / resizedHeight));
+
+  console.log(`Secondary focal point found at (${finalX}, ${finalY}) with score ${bestScore.toFixed(2)}`);
+
+  return {
+    x: finalX,
+    y: finalY,
+    score: bestScore
+  };
+}
+
 export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
     const image = formData.get('image') as File;
     const ratio = formData.get('ratio') as string;
     const width = parseInt(formData.get('width') as string) || 1080;
+    const height = formData.get('height') ? parseInt(formData.get('height') as string) : undefined;
+    const sensitivity = parseInt(formData.get('sensitivity') as string) || 5;
+    const protectFaces = formData.get('protectFaces') === 'true';
+    const consistentCrop = formData.get('consistentCrop') === 'true';
+    const dualFocalPoints = formData.get('dualFocalPoints') === 'true';
+    const isFirstImage = formData.get('isFirstImage') === 'true';
+    const imageIndex = parseInt(formData.get('imageIndex') as string) || 0;
+
+    // Generate or use batch ID for consistent cropping
+    let batchId = request.headers.get('x-batch-id');
+    if (!batchId && consistentCrop && isFirstImage) {
+      batchId = generateBatchId();
+    }
 
     if (!image) {
       return NextResponse.json({ error: 'No image provided' }, { status: 400 });
@@ -323,14 +475,26 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'No ratio provided' }, { status: 400 });
     }
 
-    // Parse ratio (e.g., "16:9" -> [16, 9])
-    const [ratioWidth, ratioHeight] = ratio.split(':').map(Number);
-    if (!ratioWidth || !ratioHeight) {
-      return NextResponse.json({ error: 'Invalid ratio format' }, { status: 400 });
-    }
+    let ratioWidth: number, ratioHeight: number, targetHeight: number;
 
-    // Calculate target dimensions
-    const targetHeight = Math.round(width * (ratioHeight / ratioWidth));
+    if (ratio === 'Custom') {
+      if (!height) {
+        return NextResponse.json({ error: 'Custom ratio requires height parameter' }, { status: 400 });
+      }
+      ratioWidth = width;
+      ratioHeight = height;
+      targetHeight = height;
+    } else {
+      // Parse ratio (e.g., "16:9" -> [16, 9])
+      const parts = ratio.split(':').map(Number);
+      if (parts.length !== 2 || !parts[0] || !parts[1]) {
+        return NextResponse.json({ error: 'Invalid ratio format' }, { status: 400 });
+      }
+      [ratioWidth, ratioHeight] = parts;
+
+      // Calculate target dimensions
+      targetHeight = Math.round(width * (ratioHeight / ratioWidth));
+    }
 
     // Convert File to Buffer
     const imageBuffer = Buffer.from(await image.arrayBuffer());
@@ -340,9 +504,24 @@ export async function POST(request: NextRequest) {
     const originalWidth = metadata.width!;
     const originalHeight = metadata.height!;
 
-    // Detect focal point (person/face)
-    const focalPoint = await detectFocalPoint(imageBuffer, originalWidth, originalHeight);
-    console.log(`Focal point detected at (${focalPoint.x}, ${focalPoint.y}) with score ${focalPoint.score}`);
+    // Detect focal point(s) with user settings
+    const useStored = consistentCrop && !isFirstImage && !!batchId;
+    const focalPoint = await detectFocalPoint(
+      imageBuffer,
+      originalWidth,
+      originalHeight,
+      sensitivity,
+      protectFaces,
+      dualFocalPoints,
+      batchId || undefined,
+      useStored
+    );
+
+    console.log(`Image ${imageIndex + 1}: Focal point detected at (${focalPoint.x}, ${focalPoint.y}) with score ${focalPoint.score}`);
+    if (focalPoint.secondary) {
+      console.log(`  Secondary focal point at (${focalPoint.secondary.x}, ${focalPoint.secondary.y}) with score ${focalPoint.secondary.score}`);
+    }
+    console.log(`  Settings: sensitivity=${sensitivity}, protectFaces=${protectFaces}, consistent=${consistentCrop}, dual=${dualFocalPoints}`);
 
     let result: Buffer;
 
@@ -360,8 +539,30 @@ export async function POST(request: NextRequest) {
       // Original is wider, crop horizontally - USAR FOCAL POINT
       const cropWidth = Math.round(originalHeight * targetRatio);
 
-      // Calcular cropX basado en focal point, pero mantener dentro de bounds
-      let cropX = focalPoint.x - Math.round(cropWidth / 2);
+      // Calcular cropX basado en focal point(s)
+      let cropX;
+
+      if (focalPoint.secondary && dualFocalPoints) {
+        // Dual mode: calcular crop que incluya ambos puntos
+        const leftMost = Math.min(focalPoint.x, focalPoint.secondary.x);
+        const rightMost = Math.max(focalPoint.x, focalPoint.secondary.x);
+        const requiredWidth = rightMost - leftMost;
+
+        console.log(`Dual crop: points at ${focalPoint.x} and ${focalPoint.secondary.x}, span: ${requiredWidth}px, crop width: ${cropWidth}px`);
+
+        if (requiredWidth < cropWidth * 0.8) { // Si ambos puntos caben cómodamente
+          const centerBetween = (leftMost + rightMost) / 2;
+          cropX = centerBetween - Math.round(cropWidth / 2);
+        } else {
+          // Si están muy separados, priorizar el punto principal
+          console.log('Dual points too far apart, prioritizing primary focal point');
+          cropX = focalPoint.x - Math.round(cropWidth / 2);
+        }
+      } else {
+        // Single mode: centrar en focal point principal
+        cropX = focalPoint.x - Math.round(cropWidth / 2);
+      }
+
       cropX = Math.max(0, Math.min(cropX, originalWidth - cropWidth));
 
       console.log(`Horizontal crop: width=${cropWidth}, cropX=${cropX} (focal point influenced)`);
@@ -416,8 +617,26 @@ export async function POST(request: NextRequest) {
         // Can crop vertically - USAR FOCAL POINT
         const cropHeight = Math.round(originalWidth / targetRatio);
 
-        // Calcular cropY basado en focal point
-        let cropY = focalPoint.y - Math.round(cropHeight / 2);
+        // Calcular cropY basado en focal point(s)
+        let cropY;
+
+        if (focalPoint.secondary && dualFocalPoints) {
+          // Dual mode: calcular crop vertical
+          const topMost = Math.min(focalPoint.y, focalPoint.secondary.y);
+          const bottomMost = Math.max(focalPoint.y, focalPoint.secondary.y);
+          const requiredHeight = bottomMost - topMost;
+
+          if (requiredHeight < cropHeight * 0.8) { // Si ambos puntos caben cómodamente
+            const centerBetween = (topMost + bottomMost) / 2;
+            cropY = centerBetween - Math.round(cropHeight / 2);
+          } else {
+            // Si están muy separados verticalmente, priorizar punto principal
+            cropY = focalPoint.y - Math.round(cropHeight / 2);
+          }
+        } else {
+          cropY = focalPoint.y - Math.round(cropHeight / 2);
+        }
+
         cropY = Math.max(0, Math.min(cropY, originalHeight - cropHeight));
 
         console.log(`Vertical crop: height=${cropHeight}, cropY=${cropY} (focal point influenced)`);
@@ -430,15 +649,36 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    return new NextResponse(result, {
+    const response = new NextResponse(result, {
       headers: {
         'Content-Type': 'image/png',
-        'Content-Disposition': `attachment; filename="smartcrop_${width}x${targetHeight}.png"`
+        'Content-Disposition': `attachment; filename="smartcrop_${width}x${targetHeight}_${ratio.replace(':', 'x')}.png"`
       }
     });
+
+    // Return batch ID for consistent cropping
+    if (batchId && isFirstImage) {
+      response.headers.set('X-Batch-Id', batchId);
+    }
+
+    return response;
 
   } catch (error) {
     console.error('Smart crop error:', error);
     return NextResponse.json({ error: 'Processing failed' }, { status: 500 });
   }
 }
+
+// Cleanup old batch data (call periodically)
+setInterval(() => {
+  const now = Date.now();
+  const maxAge = 10 * 60 * 1000; // 10 minutes
+
+  for (const [batchId] of batchFocalPoints.entries()) {
+    const timestamp = parseInt(batchId.split('_')[1]);
+    if (now - timestamp > maxAge) {
+      batchFocalPoints.delete(batchId);
+      console.log(`Cleaned up batch ${batchId}`);
+    }
+  }
+}, 5 * 60 * 1000); // Every 5 minutes

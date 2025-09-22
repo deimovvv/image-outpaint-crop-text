@@ -490,30 +490,6 @@ export default function Outpaint({ onResults, onProcessingChange }: OutpaintProp
               </div>
             </div>
 
-            <div style={{ marginBottom: 12 }}>
-              <label>Estrategia: </label>
-              <div style={{ marginTop: 6 }}>
-                {(["smart", "ai_subject", "conservative"] as MaskStrategy[]).map(s => (
-                  <button
-                    key={s}
-                    onClick={() => setMaskStrategy(s)}
-                    style={{
-                      marginRight: 8,
-                      marginBottom: 4,
-                      padding: "4px 8px",
-                      background: maskStrategy === s ? "#4CAF50" : "#222",
-                      color: maskStrategy === s ? "#fff" : "#eee",
-                      borderRadius: 4,
-                      border: "none",
-                      cursor: "pointer",
-                      fontSize: 11
-                    }}
-                  >
-                    {s === "ai_subject" ? "🤖 AI" : s}
-                  </button>
-                ))}
-              </div>
-            </div>
 
             <div>
               <div style={{ marginBottom: 12 }}>
