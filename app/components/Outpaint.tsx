@@ -33,7 +33,7 @@ export default function Outpaint({ onResults, onProcessingChange }: OutpaintProp
   const [results, setResults] = useState<string[]>([]);
   const [progress, setProgress] = useState(0);
   const [currentImage, setCurrentImage] = useState(0);
-  const [aiModel, setAiModel] = useState<"seedream" | "flux-fill">("seedream");
+  const [aiModel, setAiModel] = useState<"seedream" | "flux-fill" | "luma-photon">("seedream");
 
   const currentImg = imgElements[currentImageIndex];
   const currentPreview = cleanPreviews[currentImageIndex];
@@ -127,34 +127,61 @@ export default function Outpaint({ onResults, onProcessingChange }: OutpaintProp
 
         // Prepare form data based on AI model
         const form = new FormData();
-        form.append("prompt", currentPrompt);
         form.append("seed", String(Math.floor(Math.random() * 1000000)));
         form.append("original_image", file);
         form.append("ai_model", aiModel);
 
-        let canvasDataUrl: string;
+        let canvasDataUrl: string = "";
         let originalImageInfo: any;
         let finalDimensions: any;
 
-        if (aiModel === "flux-fill") {
+        if (aiModel === "luma-photon") {
+          // For Luma Photon, calculate dimensions based on ratio
+          const currentRatio = img.naturalWidth / img.naturalHeight;
+          let targetWidth = img.naturalWidth;
+          let targetHeight = img.naturalHeight;
+
+          if (ratio > currentRatio) {
+            // Wider ratio needed
+            targetWidth = Math.round(img.naturalHeight * ratio);
+          } else if (ratio < currentRatio) {
+            // Taller ratio needed
+            targetHeight = Math.round(img.naturalWidth / ratio);
+          }
+
+          finalDimensions = {
+            width: targetWidth,
+            height: targetHeight
+          };
+
+          // Send gravity and original dimensions to Luma Photon
+          form.append("gravity", gravity);
+          form.append("original_width", String(img.naturalWidth));
+          form.append("original_height", String(img.naturalHeight));
+          // Luma Photon doesn't need prompt - aspect ratio is controlled via API parameters
+        } else if (aiModel === "flux-fill") {
           // Generate base image and mask for FLUX Fill
           const fluxResult = buildFluxBaseImage(img, ratio, gravity);
           canvasDataUrl = fluxResult.baseImageDataUrl;
           originalImageInfo = fluxResult.originalImageInfo;
           finalDimensions = fluxResult.finalDimensions;
 
-          // Add mask for FLUX Fill
+          // Add mask and prompt for FLUX Fill
           form.append("mask_image", await dataUrlToBlob(fluxResult.maskDataUrl), "mask.png");
+          form.append("prompt", currentPrompt);
         } else {
           // Generate canvas for Seedream
           const seedreamResult = buildSeedreamCanvas(img, ratio, gravity);
           canvasDataUrl = seedreamResult.canvasDataUrl;
           originalImageInfo = seedreamResult.originalImageInfo;
           finalDimensions = seedreamResult.finalDimensions;
+          form.append("prompt", currentPrompt);
         }
 
         form.append("image_size", `${finalDimensions.width}x${finalDimensions.height}`);
-        form.append("canvas_image", await dataUrlToBlob(canvasDataUrl), "canvas.png");
+        if (canvasDataUrl && aiModel !== "luma-photon") {
+          form.append("canvas_image", await dataUrlToBlob(canvasDataUrl), "canvas.png");
+        }
 
         const res = await fetch("/api/outpaint", { method: "POST", body: form });
         const json = await res.json();
@@ -164,7 +191,7 @@ export default function Outpaint({ onResults, onProcessingChange }: OutpaintProp
           if (imageUrl) {
             // Apply protective recomposition if needed
             // For Seedream: use mask strategy
-            // For FLUX Fill: generally no need since it should respect the mask
+            // For FLUX Fill & Luma Photon: generally no need since they should respect boundaries
             const shouldProtect = aiModel === "seedream" &&
               (maskStrategy === "ai_subject" || maskStrategy === "conservative");
 
@@ -238,21 +265,21 @@ export default function Outpaint({ onResults, onProcessingChange }: OutpaintProp
     <div style={{ padding: 32, background: "#000", color: "#fff", minHeight: "100%" }}>
       <div style={{ marginBottom: 32 }}>
         <h2 style={{
-          fontSize: 18,
-          fontWeight: 700,
+          fontSize: 20,
+          fontWeight: 300,
           marginBottom: 8,
           color: "#fff",
           letterSpacing: "0.02em"
         }}>
-          OUTPAINT
+          Outpaint
         </h2>
         <p style={{
           fontSize: 13,
           color: "#666",
           margin: 0,
-          fontWeight: 400
+          fontWeight: 300
         }}>
-          Intelligent AI-powered expansion
+          AI-powered image expansion
         </p>
       </div>
 
@@ -279,12 +306,11 @@ export default function Outpaint({ onResults, onProcessingChange }: OutpaintProp
             }}
           />
           <div style={{ textAlign: "center" }}>
-            <div style={{ fontSize: 24, marginBottom: 8 }}>🎨</div>
-            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>
+            <div style={{ fontSize: 14, fontWeight: 400, marginBottom: 4 }}>
               Drop images or click to upload
             </div>
             <div style={{ fontSize: 12, color: "#666" }}>
-              Multiple images supported for batch expansion
+              Multiple images supported for batch processing
             </div>
           </div>
         </div>
@@ -302,11 +328,11 @@ export default function Outpaint({ onResults, onProcessingChange }: OutpaintProp
             }}>
               <span style={{
                 fontSize: 12,
-                fontWeight: 600,
+                fontWeight: 400,
                 color: "#888",
-                letterSpacing: "0.05em"
+                letterSpacing: "0.02em"
               }}>
-                {selectedFiles.length} IMAGE{selectedFiles.length > 1 ? 'S' : ''} LOADED
+                {selectedFiles.length} image{selectedFiles.length > 1 ? 's' : ''} loaded
               </span>
               <button
                 onClick={clearSelection}
@@ -330,7 +356,7 @@ export default function Outpaint({ onResults, onProcessingChange }: OutpaintProp
                   e.currentTarget.style.color = "#666";
                 }}
               >
-                CLEAR
+                Clear
               </button>
             </div>
 
@@ -389,12 +415,12 @@ export default function Outpaint({ onResults, onProcessingChange }: OutpaintProp
               <label style={{
                 display: "block",
                 fontSize: 12,
-                fontWeight: 600,
+                fontWeight: 400,
                 color: "#888",
                 marginBottom: 8,
-                letterSpacing: "0.05em"
+                letterSpacing: "0.02em"
               }}>
-                TARGET RATIO
+                Target Ratio
               </label>
               <select
                 value={ratio}
@@ -447,15 +473,15 @@ export default function Outpaint({ onResults, onProcessingChange }: OutpaintProp
               <label style={{
                 display: "block",
                 fontSize: 12,
-                fontWeight: 600,
+                fontWeight: 400,
                 color: "#888",
                 marginBottom: 8,
-                letterSpacing: "0.05em"
+                letterSpacing: "0.02em"
               }}>
-                AI MODEL
+                AI Model
               </label>
               <div style={{ marginBottom: 12 }}>
-                {(["seedream", "flux-fill"] as const).map(model => (
+                {(["seedream", "flux-fill", "luma-photon"] as const).map(model => (
                   <button
                     key={model}
                     onClick={() => setAiModel(model)}
@@ -464,7 +490,8 @@ export default function Outpaint({ onResults, onProcessingChange }: OutpaintProp
                       marginBottom: 4,
                       padding: "8px 12px",
                       background: aiModel === model ?
-                        (model === "seedream" ? "#FF6B35" : "#4CAF50") : "#222",
+                        (model === "seedream" ? "#FF6B35" :
+                         model === "flux-fill" ? "#4CAF50" : "#9C27B0") : "#222",
                       color: aiModel === model ? "#fff" : "#eee",
                       borderRadius: 6,
                       border: "none",
@@ -474,7 +501,8 @@ export default function Outpaint({ onResults, onProcessingChange }: OutpaintProp
                       transition: "all 0.2s ease"
                     }}
                   >
-                    {model === "seedream" ? "🌱 Seedream" : "🎯 FLUX Fill"}
+                    {model === "seedream" ? "Seedream" :
+                     model === "flux-fill" ? "FLUX Fill" : "Luma Photon"}
                   </button>
                 ))}
               </div>
@@ -486,77 +514,95 @@ export default function Outpaint({ onResults, onProcessingChange }: OutpaintProp
               }}>
                 {aiModel === "seedream" ?
                   "• Creative expansion, natural blending" :
-                  "• Precise outpainting with mask control"}
+                 aiModel === "flux-fill" ?
+                  "• Precise outpainting with mask control" :
+                  "• Smart reframing with aspect ratio control"}
               </div>
             </div>
 
 
-            <div>
-              <div style={{ marginBottom: 12 }}>
-                <div style={{ display: "flex", alignItems: "center", marginBottom: 8 }}>
-                  <label>Prompt: </label>
-                  <button
-                    onClick={() => setIsUsingAutoPrompt(!isUsingAutoPrompt)}
-                    style={{
-                      marginLeft: 8,
-                      padding: "4px 8px",
-                      background: isUsingAutoPrompt ? "#4CAF50" : "#666",
-                      color: "#fff",
-                      border: "none",
-                      borderRadius: 4,
-                      cursor: "pointer",
-                      fontSize: 11
-                    }}
-                  >
-                    {isUsingAutoPrompt ? "🤖 Auto" : "✏️ Manual"}
-                  </button>
-                </div>
-                <textarea
-                  value={customPrompt}
-                  onChange={e => {
-                    setCustomPrompt(e.target.value);
-                    setIsUsingAutoPrompt(false);
-                  }}
-                  placeholder="El prompt se genera automáticamente basado en gravity..."
-                  style={{
-                    width: "100%",
-                    height: 80,
-                    background: "#111",
-                    color: "#eee",
-                    padding: 8,
-                    border: "1px solid #333",
-                    borderRadius: 4,
-                    fontSize: 12,
-                    resize: "vertical"
-                  }}
-                />
-              </div>
-
-              <div style={{ fontSize: 10, color: "#666" }}>
-                <strong>Presets:</strong>{" "}
-                {Object.entries(PRESET_PROMPTS).slice(0, 3).map(([key, prompt]) => (
-                  <button
-                    key={key}
-                    onClick={() => {
-                      setCustomPrompt(prompt);
+            {aiModel !== "luma-photon" && (
+              <div>
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ display: "flex", alignItems: "center", marginBottom: 8 }}>
+                    <label>Prompt: </label>
+                    <button
+                      onClick={() => setIsUsingAutoPrompt(!isUsingAutoPrompt)}
+                      style={{
+                        marginLeft: 8,
+                        padding: "4px 8px",
+                        background: isUsingAutoPrompt ? "#4CAF50" : "#666",
+                        color: "#fff",
+                        border: "none",
+                        borderRadius: 4,
+                        cursor: "pointer",
+                        fontSize: 11
+                      }}
+                    >
+                      {isUsingAutoPrompt ? "Auto" : "Manual"}
+                    </button>
+                  </div>
+                  <textarea
+                    value={customPrompt}
+                    onChange={e => {
+                      setCustomPrompt(e.target.value);
                       setIsUsingAutoPrompt(false);
                     }}
+                    placeholder="El prompt se genera automáticamente basado en gravity..."
                     style={{
-                      margin: "0 4px 4px 0",
-                      padding: "2px 6px",
-                      background: "#333",
-                      color: "#ccc",
-                      border: "none",
-                      borderRadius: 3,
-                      cursor: "pointer",
-                      fontSize: 9
+                      width: "100%",
+                      height: 80,
+                      background: "#111",
+                      color: "#eee",
+                      padding: 8,
+                      border: "1px solid #333",
+                      borderRadius: 4,
+                      fontSize: 12,
+                      resize: "vertical"
                     }}
-                  >
-                    {key}
-                  </button>
-                ))}
+                  />
+                </div>
+
+                <div style={{ fontSize: 10, color: "#666" }}>
+                  <strong>Presets:</strong>{" "}
+                  {Object.entries(PRESET_PROMPTS).slice(0, 3).map(([key, prompt]) => (
+                    <button
+                      key={key}
+                      onClick={() => {
+                        setCustomPrompt(prompt);
+                        setIsUsingAutoPrompt(false);
+                      }}
+                      style={{
+                        margin: "0 4px 4px 0",
+                        padding: "2px 6px",
+                        background: "#333",
+                        color: "#ccc",
+                        border: "none",
+                        borderRadius: 3,
+                        cursor: "pointer",
+                        fontSize: 9
+                      }}
+                    >
+                      {key}
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
+
+            {aiModel === "luma-photon" && (
+              <div style={{
+                fontSize: 11,
+                color: "#888",
+                marginTop: 12,
+                padding: 12,
+                background: "#0a0a0a",
+                borderRadius: 6,
+                border: "1px solid #333"
+              }}>
+                <strong>Luma Photon:</strong> Intelligent automatic reframing based on selected aspect ratio. No prompt required.
+              </div>
+            )}
           </div>
 
         {/* Preview */}
@@ -590,11 +636,11 @@ export default function Outpaint({ onResults, onProcessingChange }: OutpaintProp
               }}>
                 <span style={{
                   fontSize: 12,
-                  fontWeight: 600,
+                  fontWeight: 400,
                   color: "#888",
-                  letterSpacing: "0.05em"
+                  letterSpacing: "0.02em"
                 }}>
-                  PROCESANDO IMÁGENES
+                  Processing images
                 </span>
                 <span style={{
                   fontSize: 11,
@@ -648,19 +694,19 @@ export default function Outpaint({ onResults, onProcessingChange }: OutpaintProp
             }}
           >
             {isProcessing ?
-              `🌱 Procesando ${selectedFiles.length} imagen${selectedFiles.length > 1 ? 'es' : ''}...` :
-              `🌱 Expandir ${selectedFiles.length} imagen${selectedFiles.length > 1 ? 'es' : ''}`
+              `Processing ${selectedFiles.length} image${selectedFiles.length > 1 ? 's' : ''}...` :
+              `${aiModel === "luma-photon" ? "Reframe" : "Expand"} ${selectedFiles.length} image${selectedFiles.length > 1 ? 's' : ''}`
             }
           </button>
         </>
       )}
 
-      <div style={{ fontSize: 12, color: "#666", lineHeight: 1.4 }}>
-        <strong>Outpaint Inteligente:</strong><br/>
-        • Preview inmediato al cargar imagen<br/>
-        • Prompts automáticos según gravity y ratio<br/>
-        • Procesamiento en lote de múltiples imágenes<br/>
-        • Recomposición protectora para preservar sujetos
+      <div style={{ fontSize: 11, color: "#666", lineHeight: 1.5, fontWeight: 300 }}>
+        <strong style={{ fontWeight: 400 }}>Features:</strong><br/>
+        • Instant preview on image upload<br/>
+        • Automatic prompts based on settings<br/>
+        • Batch processing support<br/>
+        • Protective recomposition for subjects
       </div>
     </div>
   );

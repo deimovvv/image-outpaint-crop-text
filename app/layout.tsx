@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "FAL Expand",
-  description: "AI-powered image expansion with aspect ratio control",
+  title: "AI Image Studio",
+  description: "Professional AI-powered image processing: Smart Crop, Outpaint, Text Overlay & PSD Export",
 };
 
 export default function RootLayout({

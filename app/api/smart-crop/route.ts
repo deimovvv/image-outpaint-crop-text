@@ -6,6 +6,347 @@ export const runtime = 'nodejs';
 // Global storage for consistent cropping across batch
 const batchFocalPoints = new Map<string, {x: number, y: number, score: number, secondary?: {x: number, y: number, score: number}}>;
 
+// Algoritmo especializado para detectar personas (para protect faces mode)
+async function detectPersonFocusedFocalPoint(imageBuffer: Buffer, width: number, height: number, sensitivity: number) {
+  try {
+    console.log('👤 Starting person-focused detection...');
+
+    // Procesar a resolución óptima para detección de personas
+    const resized = await sharp(imageBuffer)
+      .resize(Math.min(700, width), Math.min(500, height), { fit: 'inside' })
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+
+    const { data, info } = resized;
+    const w = info.width;
+    const h = info.height;
+
+    let bestScore = 0;
+    let bestX = Math.floor(w / 2);
+    let bestY = Math.floor(h / 2);
+
+    // Grid más fino para mejor detección de personas
+    const stepSize = Math.max(3, Math.floor(Math.min(w, h) / 60));
+    const regionSize = Math.max(20, stepSize * 6); // Región más grande para caras
+
+    for (let y = regionSize; y < h - regionSize; y += stepSize) {
+      for (let x = regionSize; x < w - regionSize; x += stepSize) {
+        const region = extractRegion(data, x - regionSize/2, y - regionSize/2, regionSize, regionSize, w, h);
+        if (region.length === 0) continue;
+
+        // Algoritmo híbrido optimizado para personas
+        const skinPixels = detectSuperSkinTones(region);
+        const faceScore = calculateFaceLikeScore(region, regionSize);
+        const contrast = calculateContrast(region);
+        const colorConsistency = calculatePersonColorConsistency(region);
+
+        let score = 0;
+        const baseSens = sensitivity / 5.0;
+
+        // SCORING ESPECÍFICO PARA PERSONAS
+        if (skinPixels > 0.04) { // Umbral alto para piel
+          // ALTA CONFIANZA: Mucha piel detectada
+          score += skinPixels * 40.0 * baseSens; // Peso muy alto para piel
+          score += faceScore * 15.0 * baseSens;  // Bonus por características faciales
+          score += contrast * 8.0 * baseSens * 0.7;
+          score += colorConsistency * 10.0 * baseSens;
+
+          console.log(`  👤 HIGH SKIN at (${x}, ${y}): ${(skinPixels*100).toFixed(1)}% skin, face: ${faceScore.toFixed(2)}, score: ${score.toFixed(1)}`);
+        } else if (skinPixels > 0.02) {
+          // MEDIA CONFIANZA: Algo de piel
+          score += skinPixels * 25.0 * baseSens;
+          score += faceScore * 10.0 * baseSens;
+          score += contrast * 8.0 * baseSens * 0.8;
+          score += colorConsistency * 6.0 * baseSens;
+        } else {
+          // BAJA CONFIANZA: Poca o nula piel - score muy bajo
+          score += contrast * 3.0 * baseSens;
+          score += faceScore * 2.0 * baseSens;
+        }
+
+        // Bonus por posición típica de personas (regla de tercios)
+        const thirdY = h / 3;
+        if (y < thirdY * 2.2 && y > thirdY * 0.3) { // Entre 30% y 220% de la altura
+          score *= 1.4;
+        }
+
+        // Bonus por zona central-superior (donde suelen estar las caras)
+        if (y < h * 0.6) {
+          score *= 1.2;
+        }
+
+        if (score > bestScore) {
+          bestScore = score;
+          bestX = x;
+          bestY = y;
+        }
+      }
+    }
+
+    // Escalar coordenadas de vuelta al tamaño original
+    const scaleX = width / w;
+    const scaleY = height / h;
+
+    const finalX = Math.floor(bestX * scaleX);
+    const finalY = Math.floor(bestY * scaleY);
+
+    console.log(`Person detection result: (${finalX}, ${finalY}) score: ${bestScore.toFixed(1)}`);
+
+    return {
+      x: finalX,
+      y: finalY,
+      score: bestScore
+    };
+
+  } catch (error) {
+    console.error('Person-focused detection error:', error);
+    return null;
+  }
+}
+
+// Detección de piel super sensible para personas
+function detectSuperSkinTones(region: Array<{r: number, g: number, b: number}>) {
+  let skinPixels = 0;
+
+  for (const pixel of region) {
+    const { r, g, b } = pixel;
+    let isSkin = false;
+
+    // Algoritmo 1: RGB mejorado con múltiples rangos
+    if (r > 95 && g > 40 && b > 20 && r > g && r > b && (r - g) > 15 && (r - b) > 15) {
+      isSkin = true;
+    }
+
+    // Algoritmo 2: Piel clara
+    if (r > 180 && g > 150 && b > 120 && r > g && Math.abs(r - g) < 30) {
+      isSkin = true;
+    }
+
+    // Algoritmo 3: Piel media
+    if (r > 120 && r < 180 && g > 70 && g < 140 && b > 50 && b < 100 && r > g && (r - b) > 20) {
+      isSkin = true;
+    }
+
+    // Algoritmo 4: Piel oscura
+    if (r > 70 && r < 120 && g > 40 && g < 90 && b > 25 && b < 70 && r >= g && (r - b) > 15) {
+      isSkin = true;
+    }
+
+    // Algoritmo 5: YCbCr (muy confiable)
+    const cb = 128 - 0.168736 * r - 0.331264 * g + 0.5 * b;
+    const cr = 128 + 0.5 * r - 0.418688 * g - 0.081312 * b;
+    if (cb >= 75 && cb <= 130 && cr >= 130 && cr <= 180) {
+      isSkin = true;
+    }
+
+    if (isSkin) skinPixels++;
+  }
+
+  return region.length > 0 ? skinPixels / region.length : 0;
+}
+
+// Calcular score de características faciales
+function calculateFaceLikeScore(region: Array<{r: number, g: number, b: number}>, regionSize: number): number {
+  if (region.length === 0) return 0;
+
+  let faceScore = 0;
+
+  // 1. Consistency de color (caras son relativamente uniformes)
+  const avgR = region.reduce((sum, p) => sum + p.r, 0) / region.length;
+  const avgG = region.reduce((sum, p) => sum + p.g, 0) / region.length;
+  const avgB = region.reduce((sum, p) => sum + p.b, 0) / region.length;
+
+  const variance = region.reduce((sum, p) => {
+    return sum + Math.pow(p.r - avgR, 2) + Math.pow(p.g - avgG, 2) + Math.pow(p.b - avgB, 2);
+  }, 0) / region.length;
+
+  const stdDev = Math.sqrt(variance);
+
+  // Caras tienen varianza moderada (15-45 es ideal)
+  if (stdDev >= 15 && stdDev <= 45) {
+    faceScore += 1.0;
+  } else if (stdDev >= 10 && stdDev <= 60) {
+    faceScore += 0.5;
+  }
+
+  // 2. Brillo apropiado para caras (80-200)
+  const avgBrightness = (avgR + avgG + avgB) / 3;
+  if (avgBrightness >= 80 && avgBrightness <= 200) {
+    faceScore += 1.0;
+  } else if (avgBrightness >= 60 && avgBrightness <= 220) {
+    faceScore += 0.5;
+  }
+
+  // 3. Relación de canales típica de piel
+  if (avgR > avgG && avgG >= avgB && (avgR - avgB) > 10) {
+    faceScore += 0.8;
+  }
+
+  return faceScore / 2.8; // Normalizar a 0-1
+}
+
+// Consistencia de color específica para personas
+function calculatePersonColorConsistency(region: Array<{r: number, g: number, b: number}>): number {
+  if (region.length === 0) return 0;
+
+  const avgR = region.reduce((sum, p) => sum + p.r, 0) / region.length;
+  const avgG = region.reduce((sum, p) => sum + p.g, 0) / region.length;
+  const avgB = region.reduce((sum, p) => sum + p.b, 0) / region.length;
+
+  // Las personas tienen colores de piel consistentes
+  const rVariance = region.reduce((sum, p) => sum + Math.pow(p.r - avgR, 2), 0) / region.length;
+  const gVariance = region.reduce((sum, p) => sum + Math.pow(p.g - avgG, 2), 0) / region.length;
+  const bVariance = region.reduce((sum, p) => sum + Math.pow(p.b - avgB, 2), 0) / region.length;
+
+  const avgVariance = (rVariance + gVariance + bVariance) / 3;
+  const stdDev = Math.sqrt(avgVariance);
+
+  // Personas tienen consistencia moderada (no demasiado uniforme, no caótica)
+  if (stdDev >= 12 && stdDev <= 35) {
+    return 1.0;
+  } else if (stdDev >= 8 && stdDev <= 50) {
+    return 0.6;
+  }
+
+  return Math.max(0, 1.0 - (stdDev / 60));
+}
+
+// Detección inteligente basada en composición fotográfica y regla de tercios
+async function detectSubjectIntelligent(imageBuffer: Buffer, width: number, height: number) {
+  try {
+    console.log('Using intelligent composition-based subject detection...');
+
+    // Procesar imagen para análisis
+    const resized = await sharp(imageBuffer)
+      .resize(Math.min(600, width), Math.min(450, height), { fit: 'inside' })
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+
+    const { data, info } = resized;
+    const w = info.width;
+    const h = info.height;
+
+    console.log(`Analyzing ${w}x${h} image using composition rules`);
+
+    // Puntos de la regla de tercios (donde suelen estar los sujetos importantes)
+    const thirdX1 = Math.floor(w / 3);
+    const thirdX2 = Math.floor((2 * w) / 3);
+    const thirdY1 = Math.floor(h / 3);
+    const thirdY2 = Math.floor((2 * h) / 3);
+
+    const candidatePoints = [
+      // Puntos de regla de tercios (alta probabilidad de sujetos)
+      { x: thirdX1, y: thirdY1, weight: 1.5, name: 'top-left-third' },
+      { x: thirdX2, y: thirdY1, weight: 1.5, name: 'top-right-third' },
+      { x: thirdX1, y: thirdY2, weight: 1.2, name: 'bottom-left-third' },
+      { x: thirdX2, y: thirdY2, weight: 1.2, name: 'bottom-right-third' },
+
+      // Áreas laterales (común en retratos)
+      { x: Math.floor(w * 0.2), y: Math.floor(h * 0.4), weight: 1.3, name: 'left-portrait' },
+      { x: Math.floor(w * 0.8), y: Math.floor(h * 0.4), weight: 1.3, name: 'right-portrait' },
+
+      // Centro (backup)
+      { x: Math.floor(w / 2), y: Math.floor(h / 2), weight: 0.8, name: 'center' },
+    ];
+
+    let bestPoint = null;
+    let maxScore = 0;
+
+    for (const candidate of candidatePoints) {
+      const regionSize = Math.min(60, Math.floor(Math.min(w, h) / 8));
+      const region = extractRegion(data,
+        candidate.x - regionSize/2,
+        candidate.y - regionSize/2,
+        regionSize, regionSize, w, h);
+
+      if (region.length === 0) continue;
+
+      // Calcular métricas simples pero efectivas
+      const contrast = calculateContrast(region);
+      const edgeDensity = calculateEdgeDensity(region, regionSize);
+      const colorVariance = calculateColorVariance(region);
+
+      // Calcular brillo promedio
+      const brightness = region.reduce((sum, pixel) => sum + (pixel.r + pixel.g + pixel.b) / 3, 0) / region.length;
+
+      // Score basado en características visuales importantes
+      let score = 0;
+
+      // Contraste alto indica sujetos definidos
+      score += contrast * 20;
+
+      // Densidad de bordes moderada (no demasiado caótica)
+      if (edgeDensity > 0.15 && edgeDensity < 0.7) {
+        score += edgeDensity * 15;
+      }
+
+      // Varianza de color indica detalles/texturas
+      score += colorVariance * 10;
+
+      // Preferir rangos de brillo intermedios (evitar muy oscuro/claro)
+      if (brightness > 50 && brightness < 200) {
+        score += 10;
+      }
+
+      // Aplicar peso de composición
+      score *= candidate.weight;
+
+      if (score > 20) {
+        console.log(`Strong candidate ${candidate.name}: score=${score.toFixed(1)}`);
+      };
+
+      if (score > maxScore) {
+        maxScore = score;
+        bestPoint = {
+          x: candidate.x,
+          y: candidate.y,
+          score,
+          name: candidate.name,
+          contrast,
+          edgeDensity,
+          brightness
+        };
+      }
+    }
+
+    if (bestPoint && maxScore > 15) {
+      // Escalar coordenadas de vuelta al tamaño original
+      const scaleX = width / w;
+      const scaleY = height / h;
+
+      const finalX = Math.floor(bestPoint.x * scaleX);
+      const finalY = Math.floor(bestPoint.y * scaleY);
+
+      console.log(`Best subject point: ${bestPoint.name} at (${finalX}, ${finalY}) with score ${maxScore.toFixed(1)}`);
+
+      return {
+        x: finalX,
+        y: finalY,
+        score: maxScore,
+        detection: 'intelligent',
+        region: bestPoint.name
+      };
+    }
+
+    console.log('No strong subject candidates found, using composition fallback');
+
+    // Fallback inteligente: persona del lado izquierdo
+    const fallbackX = Math.floor(width * 0.25); // 25% desde la izquierda
+    const fallbackY = Math.floor(height * 0.4);  // 40% desde arriba
+
+    return {
+      x: fallbackX,
+      y: fallbackY,
+      score: 10,
+      detection: 'fallback-left'
+    };
+
+  } catch (error) {
+    console.error('Intelligent subject detection error:', error);
+    return null;
+  }
+}
+
 // Generate batch ID from timestamp + random
 function generateBatchId(): string {
   return `batch_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -23,6 +364,49 @@ async function detectFocalPoint(
   useStoredFocalPoint: boolean = false
 ): Promise<{x: number, y: number, score: number, secondary?: {x: number, y: number, score: number}}> {
   try {
+    // Si protectFaces está activado, usar algoritmo especializado para personas
+    if (protectFaces) {
+      console.log('🔍 PROTECT FACES MODE: Looking for people...');
+
+      // Usar algoritmo más agresivo para detectar personas
+      const personFocalPoint = await detectPersonFocusedFocalPoint(imageBuffer, width, height, sensitivity);
+
+      if (personFocalPoint && personFocalPoint.score > 8.0) {
+        const result = {
+          x: personFocalPoint.x,
+          y: personFocalPoint.y,
+          score: personFocalPoint.score
+        };
+
+        // Almacenar para batch consistency
+        if (batchId && !batchFocalPoints.has(batchId)) {
+          batchFocalPoints.set(batchId, result);
+          console.log(`Stored person-focused focal point for batch ${batchId}`);
+        }
+
+        console.log(`👤 PERSON DETECTED: (${result.x}, ${result.y}) score: ${result.score.toFixed(1)}`);
+        return result;
+      } else {
+        console.log('⚠️  No clear person detected, using intelligent fallback...');
+
+        // Fallback: usar detección inteligente
+        const subjectDetection = await detectSubjectIntelligent(imageBuffer, width, height);
+        if (subjectDetection && subjectDetection.score > 15) {
+          const result = {
+            x: subjectDetection.x,
+            y: subjectDetection.y,
+            score: subjectDetection.score
+          };
+
+          if (batchId && !batchFocalPoints.has(batchId)) {
+            batchFocalPoints.set(batchId, result);
+          }
+
+          console.log(`📐 COMPOSITION FALLBACK: (${result.x}, ${result.y}) score: ${result.score.toFixed(1)}`);
+          return result;
+        }
+      }
+    }
     // Si es modo batch consistente, usar focal point almacenado
     if (useStoredFocalPoint && batchId && batchFocalPoints.has(batchId)) {
       const stored = batchFocalPoints.get(batchId)!;
@@ -44,14 +428,15 @@ async function detectFocalPoint(
     const h = resized.height!;
 
     console.log(`Analyzing image of size ${w}x${h} for focal points`);
+    console.log(`  Settings: sensitivity=${sensitivity}, protectFaces=${protectFaces}, dual=${dualMode}, batchId=${batchId || 'none'}`);
 
     let bestScore = 0;
     let bestX = Math.floor(w / 2);
     let bestY = Math.floor(h / 2);
 
     // Grid más fino para mejor detección
-    const stepSize = Math.max(4, Math.floor(Math.min(w, h) / 30));
-    const regionSize = stepSize * 3;
+    const stepSize = Math.max(2, Math.floor(Math.min(w, h) / 50)); // Grid más fino
+    const regionSize = Math.max(12, stepSize * 4); // Región más grande para mejor contexto
 
     const scanResults: Array<{x: number, y: number, score: number}> = [];
 
@@ -67,31 +452,61 @@ async function detectFocalPoint(
         const edgeDensity = calculateEdgeDensity(region, regionSize);
         const colorVariance = calculateColorVariance(region);
 
-        // Algoritmo de scoring ajustable por sensibilidad
+        // Algoritmo de scoring mejorado y más equilibrado
         let score = 0;
-        const baseSensitivity = sensitivity / 5.0; // Normalizar a 1.0
+        const baseSensitivity = sensitivity / 5.0;
 
-        // Priorizar detección de piel - ajustable por protectFaces
-        const skinWeight = protectFaces ? 12.0 * baseSensitivity : 8.0 * baseSensitivity;
-        score += skinPixels * skinWeight;
+        // Sistema de scoring optimizado
+        const skinWeight = protectFaces ? 25.0 * baseSensitivity : 12.0 * baseSensitivity;
+        const contrastWeight = 8.0 * baseSensitivity;
+        const edgeWeight = 5.0 * baseSensitivity;
+        const varianceWeight = 3.0 * baseSensitivity;
 
-        // Contraste alto indica rasgos definidos
-        score += contrast * (5.0 * baseSensitivity);
+        // Combinar métricas con detección mejorada
+        if (skinPixels > 0.03) { // Umbral más alto para evitar falsos positivos
+          // PERSONA DETECTADA: scoring muy alto para piel
+          score += skinPixels * skinWeight * 2.0; // Doble peso para piel
+          score += contrast * contrastWeight * 0.8;
+          score += edgeDensity * edgeWeight * 0.6;
 
-        // Edges para bordes y definición
-        score += edgeDensity * (3.0 * baseSensitivity);
+          console.log(`  PERSON at (${x}, ${y}): ${(skinPixels*100).toFixed(1)}% skin, score: ${score.toFixed(1)}`);
+        } else if (skinPixels > 0.01) {
+          // Posible piel pero no muy seguro
+          score += skinPixels * skinWeight * 1.2;
+          score += contrast * contrastWeight * 0.9;
+          score += edgeDensity * edgeWeight * 0.7;
+        } else {
+          // OBJETO/PRODUCTO: priorizar contraste y bordes
+          score += contrast * contrastWeight * 1.4;
+          score += edgeDensity * edgeWeight * 1.3;
 
-        // Varianza de color (diversidad indica complexión)
-        score += colorVariance * (2.0 * baseSensitivity);
-
-        // Bonus por posición vertical favorable (cara típicamente en tercio superior)
-        if (y < h * 0.5) {
-          score *= 1.4;
+          // Bonus por alta varianza de color (productos coloridos)
+          if (colorVariance > 0.3) {
+            score += colorVariance * varianceWeight * 1.5;
+          }
         }
 
-        // Menos penalización por bordes para permitir personas en los lados
+        score += colorVariance * varianceWeight;
+
+        // Regla de tercios y composición
+        const thirdY = h / 3;
+        const centerY = h / 2;
+
+        if (y < thirdY || (y > thirdY && y < thirdY * 2)) {
+          score *= 1.3; // Bonus por regla de tercios
+        } else if (y > centerY && y < h * 0.75) {
+          score *= 1.1; // Menor bonus por zona media-baja
+        }
+
+        // Penalización por bordes más suave y progresiva
         const edgeDistance = Math.min(x, w - x, y, h - y);
-        const edgePenalty = edgeDistance < stepSize ? 0.7 : 1.0;  // Menos penalización
+        const edgeRatio = edgeDistance / Math.min(w, h);
+        let edgePenalty = 1.0;
+
+        if (edgeRatio < 0.05) edgePenalty = 0.6; // Muy cerca del borde
+        else if (edgeRatio < 0.1) edgePenalty = 0.8; // Cerca del borde
+        else if (edgeRatio < 0.15) edgePenalty = 0.95; // Algo cerca del borde
+
         score *= edgePenalty;
 
         scanResults.push({x, y, score});
@@ -104,12 +519,87 @@ async function detectFocalPoint(
       }
     }
 
-    // Debug: mostrar top 3 candidatos
+    // Refinamiento de segunda pasada en área del mejor candidato
+    if (bestScore > 0) {
+      console.log(`Refining around best candidate (${bestX}, ${bestY}) with score ${bestScore.toFixed(2)}`);
+
+      const refineRadius = stepSize * 2;
+      const fineStep = Math.max(1, Math.floor(stepSize / 3));
+
+      for (let ry = Math.max(regionSize, bestY - refineRadius);
+           ry <= Math.min(h - regionSize, bestY + refineRadius);
+           ry += fineStep) {
+        for (let rx = Math.max(regionSize, bestX - refineRadius);
+             rx <= Math.min(w - regionSize, bestX + refineRadius);
+             rx += fineStep) {
+
+          if (rx === bestX && ry === bestY) continue; // Skip already computed point
+
+          const region = extractRegion(data, rx - regionSize/2, ry - regionSize/2, regionSize, regionSize, w, h);
+          if (region.length === 0) continue;
+
+          const skinPixels = detectSkinTonesImproved(region);
+          const contrast = calculateContrast(region);
+          const edgeDensity = calculateEdgeDensity(region, regionSize);
+          const colorVariance = calculateColorVariance(region);
+
+          // Usar el mismo algoritmo de scoring
+          let score = 0;
+          const baseSensitivity = sensitivity / 5.0;
+          const skinWeight = protectFaces ? 15.0 * baseSensitivity : 8.0 * baseSensitivity;
+          const contrastWeight = 6.0 * baseSensitivity;
+          const edgeWeight = 4.0 * baseSensitivity;
+          const varianceWeight = 2.5 * baseSensitivity;
+
+          if (skinPixels > 0.01) {
+            score += skinPixels * skinWeight;
+            score += contrast * contrastWeight * 0.7;
+            score += edgeDensity * edgeWeight * 0.5;
+
+            // Bonus adicional por detección de piel en refinement
+            score += skinPixels * skinWeight * 0.5;
+          } else {
+            score += contrast * contrastWeight * 1.2;
+            score += edgeDensity * edgeWeight * 1.1;
+          }
+
+          score += colorVariance * varianceWeight;
+
+          // Aplicar modificadores de posición
+          const thirdY = h / 3;
+          const centerY = h / 2;
+
+          if (ry < thirdY || (ry > thirdY && ry < thirdY * 2)) {
+            score *= 1.3;
+          } else if (ry > centerY && ry < h * 0.75) {
+            score *= 1.1;
+          }
+
+          const edgeDistance = Math.min(rx, w - rx, ry, h - ry);
+          const edgeRatio = edgeDistance / Math.min(w, h);
+          let edgePenalty = 1.0;
+
+          if (edgeRatio < 0.05) edgePenalty = 0.6;
+          else if (edgeRatio < 0.1) edgePenalty = 0.8;
+          else if (edgeRatio < 0.15) edgePenalty = 0.95;
+
+          score *= edgePenalty;
+
+          if (score > bestScore) {
+            bestScore = score;
+            bestX = rx;
+            bestY = ry;
+            console.log(`  Refined to (${bestX}, ${bestY}) score: ${bestScore.toFixed(2)}`);
+          }
+        }
+      }
+    }
+
+    // Debug: mostrar solo el mejor candidato
     scanResults.sort((a, b) => b.score - a.score);
-    console.log('Top 3 focal point candidates:');
-    for (let i = 0; i < Math.min(3, scanResults.length); i++) {
-      const candidate = scanResults[i];
-      console.log(`  ${i+1}. (${candidate.x}, ${candidate.y}) score: ${candidate.score.toFixed(2)}`);
+    if (scanResults.length > 0) {
+      const best = scanResults[0];
+      console.log(`Best focal point candidate: (${best.x}, ${best.y}) score: ${best.score.toFixed(1)}`);
     }
 
     // Escalar coordenadas de vuelta al tamaño original
@@ -184,90 +674,61 @@ function extractRegion(data: Buffer, x: number, y: number, regionWidth: number, 
   return region;
 }
 
-// Algoritmo mejorado de detección de piel más permisivo
+// Algoritmo optimizado para detectar piel de personas
 function detectSkinTonesImproved(region: Array<{r: number, g: number, b: number}>) {
   let skinPixels = 0;
+  let totalPixels = region.length;
+
+  if (totalPixels === 0) return 0;
 
   for (const pixel of region) {
     const { r, g, b } = pixel;
-
-    // Múltiples algoritmos de detección de piel con umbrales más permisivos
     let isSkin = false;
 
-    // Algoritmo 1: Rangos RGB expandidos
-    if (r > 60 && g > 30 && b > 15 &&  // Umbrales más bajos
-        r > g && r > b &&
-        Math.max(r, g, b) - Math.min(r, g, b) > 10 &&  // Menos restrictivo
-        Math.abs(r - g) > 8) {  // Menos restrictivo
-      isSkin = true;
-    }
-
-    // Algoritmo 2: HSV con rangos expandidos
-    const hsv = rgbToHsv(r, g, b);
-    if ((hsv.h >= 0 && hsv.h <= 60) || (hsv.h >= 300 && hsv.h <= 360)) {  // Rango expandido
-      if (hsv.s >= 0.15 && hsv.s <= 0.8 && hsv.v >= 0.2) {  // Más permisivo
-        isSkin = true;
-      }
-    }
-
-    // Algoritmo 3: YCbCr más permisivo
-    const y = 0.299 * r + 0.587 * g + 0.114 * b;
-    const cb = 128 - 0.168736 * r - 0.331264 * g + 0.5 * b;
-    const cr = 128 + 0.5 * r - 0.418688 * g - 0.081312 * b;
-
-    if (cb >= 70 && cb <= 135 && cr >= 125 && cr <= 180) {  // Rangos expandidos
-      isSkin = true;
-    }
-
-    // Algoritmo 4: Simple warmth detection (colores cálidos)
-    if (r > b && (r + g) > b * 1.5 && r > 80) {
-      isSkin = true;
-    }
-
-    if (isSkin) skinPixels++;
-  }
-
-  return region.length > 0 ? skinPixels / region.length : 0;
-}
-
-// Función para backward compatibility
-function detectSkinTones(region: Array<{r: number, g: number, b: number}>) {
-  let skinPixels = 0;
-
-  for (const pixel of region) {
-    const { r, g, b } = pixel;
-
-    // Múltiples algoritmos de detección de piel
-    let isSkin = false;
-
-    // Algoritmo 1: Rangos RGB tradicionales
+    // Algoritmo combinado más robusto para diferentes tonos de piel
+    // Condición 1: Rangos RGB mejorados para piel clara y media
     if (r > 95 && g > 40 && b > 20 &&
         r > g && r > b &&
-        Math.max(r, g, b) - Math.min(r, g, b) > 15 &&
-        Math.abs(r - g) > 15 && r > g && r > b) {
+        (r - g) > 15 && (r - b) > 15 &&
+        Math.max(r, g, b) - Math.min(r, g, b) > 15) {
       isSkin = true;
     }
 
-    // Algoritmo 2: HSV skin detection
+    // Condición 2: HSV para piel en general
     const hsv = rgbToHsv(r, g, b);
-    if (hsv.h >= 0 && hsv.h <= 50 && hsv.s >= 0.23 && hsv.s <= 0.68) {
+    if (hsv.h >= 0 && hsv.h <= 50 && hsv.s >= 0.20 && hsv.s <= 0.68) {
       isSkin = true;
     }
 
-    // Algoritmo 3: YCbCr skin detection
-    const y = 0.299 * r + 0.587 * g + 0.114 * b;
+    // Condición 3: YCbCr para detección más precisa
     const cb = 128 - 0.168736 * r - 0.331264 * g + 0.5 * b;
     const cr = 128 + 0.5 * r - 0.418688 * g - 0.081312 * b;
-
     if (cb >= 77 && cb <= 127 && cr >= 133 && cr <= 173) {
       isSkin = true;
     }
 
-    if (isSkin) skinPixels++;
+    // Condición 4: Para piel más oscura
+    if (r > 60 && g > 35 && b > 20 &&
+        r > g && r > b &&
+        (r - b) > 10 && (r - g) > 5) {
+      isSkin = true;
+    }
+
+    if (isSkin) {
+      skinPixels++;
+    }
   }
 
-  return region.length > 0 ? skinPixels / region.length : 0;
+  const skinRatio = skinPixels / totalPixels;
+
+  // Solo log si hay detección significativa de piel
+  if (skinRatio > 0.05) {
+    console.log(`  SKIN DETECTED: ${(skinRatio*100).toFixed(1)}% skin pixels`);
+  }
+
+  return skinRatio;
 }
+
 
 // Convertir RGB a HSV
 function rgbToHsv(r: number, g: number, b: number) {
@@ -330,7 +791,11 @@ function calculateEdgeDensity(region: Array<{r: number, g: number, b: number}>, 
                             Math.abs(current.g - bottom.g) +
                             Math.abs(current.b - bottom.b);
 
-        if (horizontalDiff > 20 || verticalDiff > 20) {  // Umbral más bajo
+        // Umbral adaptativo basado en la intensidad promedio
+        const avgIntensity = (current.r + current.g + current.b) / 3;
+        const threshold = Math.max(15, Math.min(35, avgIntensity * 0.15));
+
+        if (horizontalDiff > threshold || verticalDiff > threshold) {
           edges++;
         }
       }

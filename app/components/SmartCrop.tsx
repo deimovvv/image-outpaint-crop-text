@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { generateSmartCropPSD, exportToPSD } from "@/lib/psd-export";
 
 const RATIOS = [
   { label: "1:1", value: 1/1 },
@@ -33,6 +34,9 @@ export default function SmartCrop({ onResults, onProcessingChange }: SmartCropPr
   const [dragOver, setDragOver] = useState(false);
   const [selectedImageIndex, setSelectedImageIndex] = useState<number | null>(null);
   const [batchId, setBatchId] = useState<string | null>(null);
+  const [originalImages, setOriginalImages] = useState<string[]>([]);
+  const [cropMetadata, setCropMetadata] = useState<Array<{focalPoint: {x: number, y: number}, cropData: any}>>([]);
+  const [isExportingPSD, setIsExportingPSD] = useState(false);
 
   const handleFilesSelect = (files: FileList | null) => {
     if (!files) return;
@@ -40,9 +44,10 @@ export default function SmartCrop({ onResults, onProcessingChange }: SmartCropPr
     const fileArray = Array.from(files);
     setSelectedFiles(fileArray);
 
-    // Generate previews and calculate crop areas
+    // Generate previews and store original image URLs
     const previewUrls = fileArray.map(file => URL.createObjectURL(file));
     setPreviews(previewUrls);
+    setOriginalImages(previewUrls); // Store for PSD export
 
     // Calculate preview crop areas
     calculatePreviewCrops(fileArray);
@@ -146,6 +151,13 @@ export default function SmartCrop({ onResults, onProcessingChange }: SmartCropPr
           const blob = await res.blob();
           const url = URL.createObjectURL(blob);
           results.push(url);
+
+          // Store metadata for PSD export (mock data for now)
+          const metadata = {
+            focalPoint: { x: 500, y: 300 }, // This would come from the API response
+            cropData: { x: 0, y: 0, width: ratio === 0 ? customWidth : 1080, height: ratio === 0 ? customHeight : Math.round((ratio === 0 ? customWidth : 1080) * (ratio === 0 ? customHeight/customWidth : 1/ratio)) } as Record<string, number>
+          };
+          setCropMetadata(prev => [...prev, metadata]);
         } else {
           const error = await res.text();
           console.error("Smart Crop Error:", error);
@@ -172,11 +184,72 @@ export default function SmartCrop({ onResults, onProcessingChange }: SmartCropPr
     setSelectedFiles([]);
     setPreviews([]);
     setPreviewCrops([]);
+    setOriginalImages([]);
+    setCropMetadata([]);
     setProgress(0);
     setCurrentImage(0);
     setSelectedImageIndex(null);
     setBatchId(null);
     onResults([]);
+  };
+
+  const exportSelectedAsPSD = async (index: number) => {
+    if (!originalImages[index] || index >= cropMetadata.length) return;
+
+    setIsExportingPSD(true);
+    try {
+      // Get the result images from onResults callback
+      const resultImages = document.querySelectorAll('[data-result-image]');
+      const resultUrl = (resultImages[index] as HTMLImageElement)?.src || '';
+
+      if (!resultUrl) {
+        alert('No result image found. Please crop the images first.');
+        return;
+      }
+
+      const psdData = await generateSmartCropPSD(
+        originalImages[index],
+        resultUrl,
+        cropMetadata[index].cropData,
+        cropMetadata[index].focalPoint,
+        ratio === 0 ? customWidth : 1080,
+        ratio === 0 ? customHeight : Math.round((ratio === 0 ? customWidth : 1080) * (ratio === 0 ? customHeight/customWidth : 1/ratio))
+      );
+
+      const psdBlob = await exportToPSD(psdData);
+
+      // Download PSD file
+      const url = URL.createObjectURL(psdBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `smart-crop-${index + 1}-${Date.now()}.psd`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      console.log('PSD exported successfully!');
+    } catch (error) {
+      console.error('PSD export failed:', error);
+      alert('PSD export failed: ' + (error instanceof Error ? error.message : 'Unknown error'));
+    } finally {
+      setIsExportingPSD(false);
+    }
+  };
+
+  const exportAllAsPSD = async () => {
+    if (originalImages.length === 0) return;
+
+    setIsExportingPSD(true);
+    try {
+      for (let i = 0; i < originalImages.length; i++) {
+        await exportSelectedAsPSD(i);
+        // Small delay between exports
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+    } finally {
+      setIsExportingPSD(false);
+    }
   };
 
   const removeImage = (index: number) => {
@@ -223,19 +296,19 @@ export default function SmartCrop({ onResults, onProcessingChange }: SmartCropPr
     }}>
       <div style={{ marginBottom: 32 }}>
         <h2 style={{
-          fontSize: 18,
-          fontWeight: 700,
+          fontSize: 20,
+          fontWeight: 300,
           marginBottom: 8,
           color: "#fff",
           letterSpacing: "0.02em"
         }}>
-          SMART CROP
+          Smart Crop
         </h2>
         <p style={{
           fontSize: 13,
           color: "#666",
           margin: 0,
-          fontWeight: 400
+          fontWeight: 300
         }}>
           Intelligent focal point detection
         </p>
@@ -441,7 +514,7 @@ export default function SmartCrop({ onResults, onProcessingChange }: SmartCropPr
                 accentColor: "#00ff88"
               }}
             />
-            <span>🎯 PROTECT FACES</span>
+            <span>Protect Faces</span>
             <span style={{ color: "#666", fontSize: 11 }}>(Higher priority for person detection)</span>
           </label>
 
@@ -786,13 +859,112 @@ export default function SmartCrop({ onResults, onProcessingChange }: SmartCropPr
           marginBottom: 32
         }}
       >
-        {isProcessing ?
+        {isExportingPSD ? 'EXPORTING PSD...' :
+         isProcessing ?
           `PROCESSING ${selectedFiles.length} IMAGE${selectedFiles.length > 1 ? 'S' : ''}...` :
           selectedFiles.length > 0 ?
             `CROP ${selectedFiles.length} IMAGE${selectedFiles.length > 1 ? 'S' : ''}` :
             'SELECT IMAGES TO CROP'
         }
       </button>
+
+      {/* PSD Export Section */}
+      {originalImages.length > 0 && cropMetadata.length > 0 && (
+        <div style={{
+          marginBottom: 24,
+          padding: "20px",
+          background: "linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)",
+          borderRadius: "12px",
+          border: "1px solid #333"
+        }}>
+          <div style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            marginBottom: 16
+          }}>
+            <div style={{ fontSize: 16 }}>🎨</div>
+            <div style={{
+              fontSize: 12,
+              fontWeight: 700,
+              color: "#fff",
+              letterSpacing: "0.05em"
+            }}>
+              EXPORT TO PSD (NON-DESTRUCTIVE)
+            </div>
+          </div>
+
+          <div style={{
+            fontSize: 11,
+            color: "#aaa",
+            marginBottom: 16,
+            lineHeight: 1.5
+          }}>
+            Export editable Photoshop files with separate layers:
+            <br/>• Original image • Cropped result • Crop guides • Focal point markers
+          </div>
+
+          <div style={{
+            display: "flex",
+            gap: 12,
+            flexWrap: "wrap"
+          }}>
+            <button
+              onClick={exportAllAsPSD}
+              disabled={isExportingPSD || originalImages.length === 0}
+              style={{
+                padding: "12px 20px",
+                borderRadius: "8px",
+                background: isExportingPSD ? "#333" : "linear-gradient(135deg, #8B5CF6 0%, #7C3AED 100%)",
+                color: isExportingPSD ? "#666" : "#fff",
+                border: "none",
+                cursor: isExportingPSD ? "not-allowed" : "pointer",
+                fontSize: 12,
+                fontWeight: 600,
+                letterSpacing: "0.02em",
+                transition: "all 0.2s ease",
+                display: "flex",
+                alignItems: "center",
+                gap: 6
+              }}
+            >
+              {isExportingPSD ? (
+                <div style={{
+                  width: 12,
+                  height: 12,
+                  border: "2px solid #666",
+                  borderTop: "2px solid #fff",
+                  borderRadius: "50%",
+                  animation: "spin 1s linear infinite"
+                }} />
+              ) : (
+                "📎"
+              )}
+              EXPORT ALL AS PSD ({originalImages.length} files)
+            </button>
+
+            {selectedImageIndex !== null && (
+              <button
+                onClick={() => exportSelectedAsPSD(selectedImageIndex)}
+                disabled={isExportingPSD}
+                style={{
+                  padding: "12px 16px",
+                  borderRadius: "8px",
+                  background: isExportingPSD ? "#333" : "linear-gradient(135deg, #10B981 0%, #059669 100%)",
+                  color: isExportingPSD ? "#666" : "#fff",
+                  border: "none",
+                  cursor: isExportingPSD ? "not-allowed" : "pointer",
+                  fontSize: 11,
+                  fontWeight: 600,
+                  transition: "all 0.2s ease"
+                }}
+              >
+                🎨 EXPORT SELECTED PSD
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       <div style={{
         padding: "24px",
@@ -806,14 +978,13 @@ export default function SmartCrop({ onResults, onProcessingChange }: SmartCropPr
           gap: 8,
           marginBottom: 16
         }}>
-          <div style={{ fontSize: 16 }}>🎯</div>
           <div style={{
             fontSize: 12,
             fontWeight: 700,
             color: "#fff",
             letterSpacing: "0.05em"
           }}>
-            SMART CROP FEATURES
+            Features
           </div>
         </div>
         <div style={{
@@ -847,6 +1018,7 @@ export default function SmartCrop({ onResults, onProcessingChange }: SmartCropPr
             color: "#00ff88"
           }}>
             💡 Image {selectedImageIndex + 1} selected - Green overlay shows detected crop area
+            <br/>🎨 Click &quot;EXPORT SELECTED PSD&quot; below to get editable Photoshop file
           </div>
         )}
 
