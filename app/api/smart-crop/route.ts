@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import sharp from 'sharp';
+import { fal } from '@fal-ai/client';
+
+// Configure FAL with API key
+fal.config({
+  credentials: process.env.FAL_KEY!
+});
 
 export const runtime = 'nodejs';
 
@@ -923,6 +929,7 @@ export async function POST(request: NextRequest) {
     const protectFaces = formData.get('protectFaces') === 'true';
     const consistentCrop = formData.get('consistentCrop') === 'true';
     const dualFocalPoints = formData.get('dualFocalPoints') === 'true';
+    let useReframe = formData.get('useReframe') === 'true';
     const isFirstImage = formData.get('isFirstImage') === 'true';
     const imageIndex = parseInt(formData.get('imageIndex') as string) || 0;
 
@@ -986,9 +993,67 @@ export async function POST(request: NextRequest) {
     if (focalPoint.secondary) {
       console.log(`  Secondary focal point at (${focalPoint.secondary.x}, ${focalPoint.secondary.y}) with score ${focalPoint.secondary.score}`);
     }
-    console.log(`  Settings: sensitivity=${sensitivity}, protectFaces=${protectFaces}, consistent=${consistentCrop}, dual=${dualFocalPoints}`);
+    console.log(`  Settings: sensitivity=${sensitivity}, protectFaces=${protectFaces}, consistent=${consistentCrop}, dual=${dualFocalPoints}, useReframe=${useReframe}`);
 
     let result: Buffer;
+
+    // If reframe is enabled, use pure AI reframe (always generates/expands)
+    if (useReframe) {
+      console.log('🎨 AI REFRAME: Using pure AI reframe - intelligently adjusts aspect ratio while preserving subject');
+      console.log(`   Original: ${originalWidth}x${originalHeight} (${(originalWidth/originalHeight).toFixed(2)}:1)`);
+      console.log(`   Target: ${ratioWidth}:${ratioHeight} (${(ratioWidth/ratioHeight).toFixed(2)}:1)`);
+
+      try {
+        // Upload image to FAL storage
+        const imageUrl = await fal.storage.upload(image);
+        console.log('📤 Image uploaded for AI reframe:', imageUrl ? imageUrl.substring(0, 50) + '...' : 'No URL');
+
+        // Map ratio to supported aspect ratios
+        const aspectRatio = mapToSupportedRatio(ratioWidth, ratioHeight);
+        console.log(`📐 Mapped ${ratioWidth}:${ratioHeight} to ${aspectRatio}`);
+
+        // Call FAL AI reframe API
+        const reframeResult = await fal.subscribe("fal-ai/image-editing/reframe", {
+          input: {
+            image_url: imageUrl,
+            aspect_ratio: aspectRatio,
+            guidance_scale: 3.5,
+            num_inference_steps: 30,
+            safety_tolerance: "2",
+            output_format: "png"
+          },
+          logs: true,
+          onQueueUpdate: (update) => {
+            if (update.status === "IN_PROGRESS") {
+              update.logs?.map((log) => log.message).forEach(console.log);
+            }
+          }
+        });
+
+        if (reframeResult.data?.images?.[0]?.url) {
+          // Download the reframed image
+          const reframedResponse = await fetch(reframeResult.data.images[0].url);
+          const reframedBuffer = Buffer.from(await reframedResponse.arrayBuffer());
+
+          // Resize to exact target dimensions if needed
+          result = await sharp(reframedBuffer)
+            .resize(width, targetHeight, { fit: 'fill' })
+            .png()
+            .toBuffer();
+
+          console.log('✅ AI Reframe completed successfully - subject preserved with new aspect ratio');
+        } else {
+          throw new Error('No reframed image returned from API');
+        }
+      } catch (error) {
+        console.error('❌ AI Reframe failed, falling back to traditional cropping:', error);
+        // Fall through to traditional cropping logic
+        useReframe = false; // This will make it use the traditional logic below
+      }
+    }
+
+    // Traditional cropping logic (used if reframe is disabled or failed)
+    if (!useReframe) {
 
     // Check if image needs expansion or just cropping
     const originalRatio = originalWidth / originalHeight;
@@ -1113,6 +1178,7 @@ export async function POST(request: NextRequest) {
           .toBuffer();
       }
     }
+    } // End of traditional cropping logic
 
     const response = new NextResponse(result, {
       headers: {
@@ -1132,6 +1198,37 @@ export async function POST(request: NextRequest) {
     console.error('Smart crop error:', error);
     return NextResponse.json({ error: 'Processing failed' }, { status: 500 });
   }
+}
+
+
+// Map custom ratios to supported aspect ratios for reframe API
+function mapToSupportedRatio(width: number, height: number): string {
+  const ratio = width / height;
+  const supportedRatios = [
+    { ratio: 21/9, label: "21:9" },
+    { ratio: 16/9, label: "16:9" },
+    { ratio: 4/3, label: "4:3" },
+    { ratio: 3/2, label: "3:2" },
+    { ratio: 1/1, label: "1:1" },
+    { ratio: 2/3, label: "2:3" },
+    { ratio: 3/4, label: "3:4" },
+    { ratio: 9/16, label: "9:16" },
+    { ratio: 9/21, label: "9:21" }
+  ];
+
+  // Find the closest supported ratio
+  let closestRatio = supportedRatios[0];
+  let minDiff = Math.abs(ratio - closestRatio.ratio);
+
+  for (const supported of supportedRatios) {
+    const diff = Math.abs(ratio - supported.ratio);
+    if (diff < minDiff) {
+      minDiff = diff;
+      closestRatio = supported;
+    }
+  }
+
+  return closestRatio.label;
 }
 
 // Cleanup old batch data (call periodically)

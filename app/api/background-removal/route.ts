@@ -51,7 +51,7 @@ export async function POST(request: NextRequest) {
     console.log('✅ Background removal completed successfully:', {
       requestId: result.requestId,
       hasImage: !!result.data?.image?.url,
-      imageSize: result.data?.image?.file_size || 0
+      imageSize: 0
     });
 
     return NextResponse.json({

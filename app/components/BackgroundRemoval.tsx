@@ -13,6 +13,7 @@ export default function BackgroundRemoval({ onResults, onProcessingChange }: Bac
   const [isProcessing, setIsProcessing] = useState(false);
   const [progress, setProgress] = useState(0);
   const [currentImage, setCurrentImage] = useState(0);
+  const [previewModalIndex, setPreviewModalIndex] = useState<number | null>(null);
 
   const handleFilesSelect = (files: FileList | null) => {
     if (!files) return;
@@ -131,6 +132,13 @@ export default function BackgroundRemoval({ onResults, onProcessingChange }: Bac
             }}
           />
           <div style={{ textAlign: "center" }}>
+            <div style={{
+              fontSize: 24,
+              marginBottom: 12,
+              color: "#666",
+              transition: "color 0.3s ease",
+              fontWeight: 300
+            }}>⬆</div>
             <div style={{ fontSize: 14, fontWeight: 400, marginBottom: 4 }}>
               Drop images or click to upload
             </div>
@@ -201,8 +209,10 @@ export default function BackgroundRemoval({ onResults, onProcessingChange }: Bac
                       borderRadius: "8px",
                       overflow: "hidden",
                       aspectRatio: "1",
-                      transition: "all 0.2s ease"
+                      transition: "all 0.2s ease",
+                      cursor: "pointer"
                     }}
+                    onClick={() => setPreviewModalIndex(index)}
                   >
                     <img
                       src={preview}
@@ -210,7 +220,14 @@ export default function BackgroundRemoval({ onResults, onProcessingChange }: Bac
                       style={{
                         width: "100%",
                         height: "100%",
-                        objectFit: "cover"
+                        objectFit: "cover",
+                        transition: "transform 0.2s ease"
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.transform = "scale(1.05)";
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.transform = "scale(1)";
                       }}
                     />
                     <div style={{
@@ -315,6 +332,102 @@ export default function BackgroundRemoval({ onResults, onProcessingChange }: Bac
         • Preserves subject details and edges<br/>
         • Transparent PNG output
       </div>
+
+      {/* Preview Modal */}
+      {previewModalIndex !== null && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0, 0, 0, 0.9)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+            padding: 20
+          }}
+          onClick={() => setPreviewModalIndex(null)}
+        >
+          <div
+            style={{
+              position: "relative",
+              maxWidth: "90vw",
+              maxHeight: "90vh",
+              background: "#111",
+              borderRadius: 12,
+              overflow: "hidden",
+              border: "1px solid #333"
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Close button */}
+            <button
+              onClick={() => setPreviewModalIndex(null)}
+              style={{
+                position: "absolute",
+                top: 10,
+                right: 10,
+                width: 32,
+                height: 32,
+                background: "rgba(0, 0, 0, 0.8)",
+                color: "#fff",
+                border: "none",
+                borderRadius: "50%",
+                cursor: "pointer",
+                fontSize: 16,
+                fontWeight: 600,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                zIndex: 1001,
+                transition: "all 0.2s ease"
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = "rgba(255, 0, 0, 0.8)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "rgba(0, 0, 0, 0.8)";
+              }}
+            >
+              ×
+            </button>
+
+            {/* Image */}
+            <img
+              src={previewUrls[previewModalIndex]}
+              alt={`Preview ${previewModalIndex + 1}`}
+              style={{
+                width: "100%",
+                height: "100%",
+                maxWidth: "90vw",
+                maxHeight: "90vh",
+                objectFit: "contain"
+              }}
+            />
+
+            {/* Image info */}
+            <div
+              style={{
+                position: "absolute",
+                bottom: 0,
+                left: 0,
+                right: 0,
+                background: "linear-gradient(transparent, rgba(0, 0, 0, 0.8))",
+                color: "#fff",
+                padding: "20px 20px 10px",
+                fontSize: 12,
+                fontWeight: 500
+              }}
+            >
+              Image {previewModalIndex + 1} of {previewUrls.length}
+              <br />
+              <span style={{ color: "#8B5CF6" }}>
+                {selectedFiles[previewModalIndex]?.name}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

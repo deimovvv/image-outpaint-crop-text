@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { generateSmartCropPSD, exportToPSD } from "@/lib/psd-export";
 
 const RATIOS = [
   { label: "1:1", value: 1/1 },
@@ -26,6 +25,7 @@ export default function SmartCrop({ onResults, onProcessingChange }: SmartCropPr
   const [protectFaces, setProtectFaces] = useState(true);
   const [consistentCrop, setConsistentCrop] = useState(true);
   const [dualFocalPoints, setDualFocalPoints] = useState(false);
+  const [useReframe, setUseReframe] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [previews, setPreviews] = useState<string[]>([]);
   const [previewCrops, setPreviewCrops] = useState<{x: number, y: number, width: number, height: number}[]>([]);
@@ -34,9 +34,7 @@ export default function SmartCrop({ onResults, onProcessingChange }: SmartCropPr
   const [dragOver, setDragOver] = useState(false);
   const [selectedImageIndex, setSelectedImageIndex] = useState<number | null>(null);
   const [batchId, setBatchId] = useState<string | null>(null);
-  const [originalImages, setOriginalImages] = useState<string[]>([]);
-  const [cropMetadata, setCropMetadata] = useState<Array<{focalPoint: {x: number, y: number}, cropData: any}>>([]);
-  const [isExportingPSD, setIsExportingPSD] = useState(false);
+  const [previewModalIndex, setPreviewModalIndex] = useState<number | null>(null);
 
   const handleFilesSelect = (files: FileList | null) => {
     if (!files) return;
@@ -47,7 +45,7 @@ export default function SmartCrop({ onResults, onProcessingChange }: SmartCropPr
     // Generate previews and store original image URLs
     const previewUrls = fileArray.map(file => URL.createObjectURL(file));
     setPreviews(previewUrls);
-    setOriginalImages(previewUrls); // Store for PSD export
+    // Store preview URLs
 
     // Calculate preview crop areas
     calculatePreviewCrops(fileArray);
@@ -124,6 +122,7 @@ export default function SmartCrop({ onResults, onProcessingChange }: SmartCropPr
         form.append("protectFaces", protectFaces.toString());
         form.append("consistentCrop", consistentCrop.toString());
         form.append("dualFocalPoints", dualFocalPoints.toString());
+        form.append("useReframe", useReframe.toString());
         form.append("isFirstImage", (i === 0).toString());
         form.append("imageIndex", i.toString());
 
@@ -152,12 +151,7 @@ export default function SmartCrop({ onResults, onProcessingChange }: SmartCropPr
           const url = URL.createObjectURL(blob);
           results.push(url);
 
-          // Store metadata for PSD export (mock data for now)
-          const metadata = {
-            focalPoint: { x: 500, y: 300 }, // This would come from the API response
-            cropData: { x: 0, y: 0, width: ratio === 0 ? customWidth : 1080, height: ratio === 0 ? customHeight : Math.round((ratio === 0 ? customWidth : 1080) * (ratio === 0 ? customHeight/customWidth : 1/ratio)) } as Record<string, number>
-          };
-          setCropMetadata(prev => [...prev, metadata]);
+          // Processing completed
         } else {
           const error = await res.text();
           console.error("Smart Crop Error:", error);
@@ -193,64 +187,6 @@ export default function SmartCrop({ onResults, onProcessingChange }: SmartCropPr
     onResults([]);
   };
 
-  const exportSelectedAsPSD = async (index: number) => {
-    if (!originalImages[index] || index >= cropMetadata.length) return;
-
-    setIsExportingPSD(true);
-    try {
-      // Get the result images from onResults callback
-      const resultImages = document.querySelectorAll('[data-result-image]');
-      const resultUrl = (resultImages[index] as HTMLImageElement)?.src || '';
-
-      if (!resultUrl) {
-        alert('No result image found. Please crop the images first.');
-        return;
-      }
-
-      const psdData = await generateSmartCropPSD(
-        originalImages[index],
-        resultUrl,
-        cropMetadata[index].cropData,
-        cropMetadata[index].focalPoint,
-        ratio === 0 ? customWidth : 1080,
-        ratio === 0 ? customHeight : Math.round((ratio === 0 ? customWidth : 1080) * (ratio === 0 ? customHeight/customWidth : 1/ratio))
-      );
-
-      const psdBlob = await exportToPSD(psdData);
-
-      // Download PSD file
-      const url = URL.createObjectURL(psdBlob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `smart-crop-${index + 1}-${Date.now()}.psd`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-
-      console.log('PSD exported successfully!');
-    } catch (error) {
-      console.error('PSD export failed:', error);
-      alert('PSD export failed: ' + (error instanceof Error ? error.message : 'Unknown error'));
-    } finally {
-      setIsExportingPSD(false);
-    }
-  };
-
-  const exportAllAsPSD = async () => {
-    if (originalImages.length === 0) return;
-
-    setIsExportingPSD(true);
-    try {
-      for (let i = 0; i < originalImages.length; i++) {
-        await exportSelectedAsPSD(i);
-        // Small delay between exports
-        await new Promise(resolve => setTimeout(resolve, 500));
-      }
-    } finally {
-      setIsExportingPSD(false);
-    }
-  };
 
   const removeImage = (index: number) => {
     const newFiles = selectedFiles.filter((_, i) => i !== index);
@@ -288,29 +224,62 @@ export default function SmartCrop({ onResults, onProcessingChange }: SmartCropPr
   return (
     <div style={{
       padding: "clamp(16px, 4vw, 32px)",
-      background: "#000",
-      color: "#fff",
+      background: "#0A0A0A",
+      color: "#EAE8E4",
       minHeight: "100%",
       maxWidth: "1200px",
-      margin: "0 auto"
+      margin: "0 auto",
+      fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif"
     }}>
       <div style={{ marginBottom: 32 }}>
-        <h2 style={{
-          fontSize: 20,
-          fontWeight: 300,
-          marginBottom: 8,
-          color: "#fff",
-          letterSpacing: "0.02em"
-        }}>
-          Smart Crop
-        </h2>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+          <h2 style={{
+            fontSize: 24,
+            fontWeight: 600,
+            margin: 0,
+            color: "#EAE8E4",
+            letterSpacing: "-0.02em"
+          }}>
+            Smart Crop
+          </h2>
+          {useReframe && (
+            <button
+              onClick={() => {
+                console.log('Switching back to Smart Crop');
+                setUseReframe(false);
+              }}
+              style={{
+                padding: "4px 12px",
+                background: "rgba(156, 39, 176, 0.1)",
+                border: "1px solid #9C27B0",
+                borderRadius: "6px",
+                color: "#9C27B0",
+                fontSize: 11,
+                fontWeight: 500,
+                cursor: "pointer",
+                transition: "all 0.2s ease"
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = "#9C27B0";
+                e.currentTarget.style.color = "#fff";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "rgba(156, 39, 176, 0.1)";
+                e.currentTarget.style.color = "#9C27B0";
+              }}
+            >
+              ← Switch to Smart Crop
+            </button>
+          )}
+        </div>
         <p style={{
-          fontSize: 13,
-          color: "#666",
+          fontSize: 14,
+          color: "#A0A0A0",
           margin: 0,
-          fontWeight: 300
+          fontWeight: 400,
+          letterSpacing: "0.01em"
         }}>
-          Intelligent focal point detection
+          {useReframe ? "AI-powered intelligent reframing" : "Intelligent focal point detection"}
         </p>
       </div>
 
@@ -318,11 +287,11 @@ export default function SmartCrop({ onResults, onProcessingChange }: SmartCropPr
         <div
           style={{
             position: "relative",
-            border: dragOver ? "2px dashed #00ff88" : "2px dashed #333",
+            border: dragOver ? "2px dashed #DFBBFE" : "2px dashed #333",
             borderRadius: "12px",
             padding: "32px",
             background: dragOver ?
-              "linear-gradient(135deg, rgba(0,255,136,0.1) 0%, rgba(0,204,106,0.05) 100%)" :
+              "linear-gradient(135deg, rgba(223,187,254,0.1) 0%, rgba(223,187,254,0.05) 100%)" :
               "linear-gradient(135deg, #0a0a0a 0%, #111 100%)",
             transition: "all 0.3s ease",
             transform: dragOver ? "scale(1.02)" : "scale(1)"
@@ -345,11 +314,12 @@ export default function SmartCrop({ onResults, onProcessingChange }: SmartCropPr
           />
           <div style={{ textAlign: "center" }}>
             <div style={{
-              fontSize: 32,
+              fontSize: 24,
               marginBottom: 12,
-              color: dragOver ? "#00ff88" : "#666",
-              transition: "color 0.3s ease"
-            }}>📁</div>
+              color: dragOver ? "#DFBBFE" : "#666",
+              transition: "color 0.3s ease",
+              fontWeight: 300
+            }}>⬆</div>
             <div style={{
               fontSize: 16,
               fontWeight: 600,
@@ -400,16 +370,19 @@ export default function SmartCrop({ onResults, onProcessingChange }: SmartCropPr
             </select>
           </div>
 
-          <div>
+          <div style={{
+            opacity: useReframe ? 0.3 : 1,
+            pointerEvents: useReframe ? "none" : "auto"
+          }}>
             <label style={{
               display: "block",
               fontSize: 12,
               fontWeight: 600,
-              color: "#888",
+              color: useReframe ? "#555" : "#888",
               marginBottom: 8,
               letterSpacing: "0.05em"
             }}>
-              DETECTION STRENGTH
+              DETECTION STRENGTH {useReframe && "(Not used in AI Reframe)"}
             </label>
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
               <input
@@ -418,12 +391,14 @@ export default function SmartCrop({ onResults, onProcessingChange }: SmartCropPr
                 max="10"
                 value={sensitivity}
                 onChange={e => setSensitivity(Number(e.target.value))}
+                disabled={useReframe}
                 style={{
                   flex: 1,
                   height: 4,
                   background: "#333",
                   borderRadius: 2,
-                  outline: "none"
+                  outline: "none",
+                  cursor: useReframe ? "not-allowed" : "pointer"
                 }}
               />
               <span style={{ fontSize: 12, color: "#666", minWidth: 20 }}>{sensitivity}</span>
@@ -494,28 +469,36 @@ export default function SmartCrop({ onResults, onProcessingChange }: SmartCropPr
           </div>
         )}
 
-        <div style={{ display: "grid", gap: 12 }}>
+        <div style={{
+          display: "grid",
+          gap: 12,
+          opacity: useReframe ? 0.3 : 1,
+          pointerEvents: useReframe ? "none" : "auto"
+        }}>
           <label style={{
             display: "flex",
             alignItems: "center",
             gap: 8,
             fontSize: 12,
             fontWeight: 500,
-            color: "#ccc",
-            cursor: "pointer"
+            color: useReframe ? "#555" : "#ccc",
+            cursor: useReframe ? "not-allowed" : "pointer"
           }}>
             <input
               type="checkbox"
               checked={protectFaces}
               onChange={e => setProtectFaces(e.target.checked)}
+              disabled={useReframe}
               style={{
                 width: 16,
                 height: 16,
-                accentColor: "#00ff88"
+                accentColor: "#DFBBFE"
               }}
             />
             <span>Protect Faces</span>
-            <span style={{ color: "#666", fontSize: 11 }}>(Higher priority for person detection)</span>
+            <span style={{ color: "#666", fontSize: 11 }}>
+              {useReframe ? "(Not used in AI Reframe)" : "(Higher priority for person detection)"}
+            </span>
           </label>
 
           <label style={{
@@ -524,21 +507,24 @@ export default function SmartCrop({ onResults, onProcessingChange }: SmartCropPr
             gap: 8,
             fontSize: 12,
             fontWeight: 500,
-            color: "#ccc",
-            cursor: "pointer"
+            color: useReframe ? "#555" : "#ccc",
+            cursor: useReframe ? "not-allowed" : "pointer"
           }}>
             <input
               type="checkbox"
               checked={consistentCrop}
               onChange={e => setConsistentCrop(e.target.checked)}
+              disabled={useReframe}
               style={{
                 width: 16,
                 height: 16,
-                accentColor: "#00ff88"
+                accentColor: "#DFBBFE"
               }}
             />
             <span>🔄 CONSISTENT CROP</span>
-            <span style={{ color: "#666", fontSize: 11 }}>(Same focal point across all images)</span>
+            <span style={{ color: "#666", fontSize: 11 }}>
+              {useReframe ? "(Not used in AI Reframe)" : "(Same focal point across all images)"}
+            </span>
           </label>
 
           <label style={{
@@ -547,22 +533,97 @@ export default function SmartCrop({ onResults, onProcessingChange }: SmartCropPr
             gap: 8,
             fontSize: 12,
             fontWeight: 500,
-            color: "#ccc",
-            cursor: "pointer"
+            color: useReframe ? "#555" : "#ccc",
+            cursor: useReframe ? "not-allowed" : "pointer"
           }}>
             <input
               type="checkbox"
               checked={dualFocalPoints}
               onChange={e => setDualFocalPoints(e.target.checked)}
+              disabled={useReframe}
               style={{
                 width: 16,
                 height: 16,
-                accentColor: "#00ff88"
+                accentColor: "#DFBBFE"
               }}
             />
             <span>👥 DUAL FOCAL POINTS</span>
-            <span style={{ color: "#666", fontSize: 11 }}>(Find person + object separately, include both)</span>
+            <span style={{ color: "#666", fontSize: 11 }}>
+              {useReframe ? "(Not used in AI Reframe)" : "(Find person + object separately, include both)"}
+            </span>
           </label>
+
+          <div style={{
+            marginTop: 24,
+            padding: "16px",
+            background: useReframe ? "rgba(156, 39, 176, 0.1)" : "rgba(223, 187, 254, 0.05)",
+            borderRadius: "12px",
+            border: useReframe ? "2px solid #9C27B0" : "1px solid #444"
+          }}>
+            <div style={{
+              fontSize: 11,
+              color: useReframe ? "#9C27B0" : "#DFBBFE",
+              fontWeight: 600,
+              marginBottom: 8,
+              letterSpacing: "0.05em"
+            }}>
+              {useReframe ? "✅ USING AI REFRAME" : "OR USE AI REFRAME INSTEAD"}
+            </div>
+            <label style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              fontSize: 12,
+              fontWeight: 500,
+              color: "#ccc",
+              cursor: "pointer"
+            }}>
+            <button
+              onClick={() => {
+                console.log('AI Reframe toggled:', !useReframe);
+                setUseReframe(!useReframe);
+              }}
+              style={{
+                width: 20,
+                height: 20,
+                borderRadius: "4px",
+                border: useReframe ? "2px solid #9C27B0" : "2px solid #666",
+                background: useReframe ? "#9C27B0" : "transparent",
+                color: useReframe ? "#fff" : "#666",
+                cursor: "pointer",
+                fontSize: 12,
+                fontWeight: 600,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                transition: "all 0.2s ease"
+              }}
+            >
+              {useReframe ? "✓" : ""}
+            </button>
+            <div style={{ flex: 1 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span>{useReframe ? "🎯 AI REFRAME (ACTIVE)" : "🎯 AI REFRAME"}</span>
+                <span style={{
+                  background: useReframe ? "#9C27B0" : "#666",
+                  color: "#fff",
+                  padding: "2px 6px",
+                  borderRadius: "4px",
+                  fontSize: 9,
+                  fontWeight: 600
+                }}>
+                  {useReframe ? "ACTIVE" : "NEW"}
+                </span>
+              </div>
+              <div style={{ color: "#888", fontSize: 10, marginTop: 2, lineHeight: 1.3 }}>
+                {useReframe
+                  ? "✅ Using AI to intelligently adjust aspect ratio while preserving subject position and composition."
+                  : "Use AI to intelligently adjust aspect ratio while preserving subject position and composition"
+                }
+              </div>
+            </div>
+          </label>
+          </div>
         </div>
       </div>
 
@@ -620,7 +681,7 @@ export default function SmartCrop({ onResults, onProcessingChange }: SmartCropPr
                 aspectRatio: ratio === 0 ? customWidth / customHeight : ratio,
                 borderRadius: "12px",
                 overflow: "hidden",
-                border: selectedImageIndex === index ? "2px solid #00ff88" : "2px solid #222",
+                border: selectedImageIndex === index ? "2px solid #DFBBFE" : "2px solid #333",
                 cursor: "pointer",
                 transition: "all 0.2s ease",
                 background: "#111"
@@ -630,6 +691,10 @@ export default function SmartCrop({ onResults, onProcessingChange }: SmartCropPr
                 <img
                   src={preview}
                   alt={`Preview ${index + 1}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setPreviewModalIndex(index);
+                  }}
                   style={{
                     width: "100%",
                     height: "100%",
@@ -656,9 +721,9 @@ export default function SmartCrop({ onResults, onProcessingChange }: SmartCropPr
                   }}>
                     <div style={{
                       position: "absolute",
-                      border: "2px solid #00ff88",
+                      border: "2px solid #DFBBFE",
                       borderRadius: "4px",
-                      background: "rgba(0,255,136,0.1)",
+                      background: "rgba(223,187,254,0.1)",
                       left: `${(previewCrops[index].x / (previewCrops[index].x + previewCrops[index].width)) * 50}%`,
                       top: `${(previewCrops[index].y / (previewCrops[index].y + previewCrops[index].height)) * 50}%`,
                       width: `${(previewCrops[index].width / (previewCrops[index].x + previewCrops[index].width)) * 50}%`,
@@ -733,7 +798,7 @@ export default function SmartCrop({ onResults, onProcessingChange }: SmartCropPr
                       width: 32,
                       height: 32,
                       border: "3px solid #333",
-                      borderTop: "3px solid #00ff88",
+                      borderTop: "3px solid #DFBBFE",
                       borderRadius: "50%",
                       animation: "spin 1s linear infinite"
                     }} />
@@ -769,7 +834,7 @@ export default function SmartCrop({ onResults, onProcessingChange }: SmartCropPr
                 width: 16,
                 height: 16,
                 border: "2px solid #333",
-                borderTop: "2px solid #00ff88",
+                borderTop: "2px solid #DFBBFE",
                 borderRadius: "50%",
                 animation: "spin 1s linear infinite"
               }} />
@@ -784,7 +849,7 @@ export default function SmartCrop({ onResults, onProcessingChange }: SmartCropPr
             </div>
             <span style={{
               fontSize: 12,
-              color: "#00ff88",
+              color: "#DFBBFE",
               fontWeight: 600
             }}>
               {currentImage}/{selectedFiles.length} • {Math.round(progress)}%
@@ -802,7 +867,7 @@ export default function SmartCrop({ onResults, onProcessingChange }: SmartCropPr
             <div style={{
               width: `${progress}%`,
               height: "100%",
-              background: "linear-gradient(90deg, #00ff88 0%, #00cc6a 50%, #00ff88 100%)",
+              background: "linear-gradient(90deg, #DFBBFE 0%, #C8A2FE 50%, #DFBBFE 100%)",
               transition: "width 0.3s ease",
               borderRadius: 6,
               position: "relative",
@@ -848,7 +913,9 @@ export default function SmartCrop({ onResults, onProcessingChange }: SmartCropPr
           borderRadius: "12px",
           background: (selectedFiles.length === 0 || isProcessing) ?
             "linear-gradient(135deg, #333 0%, #444 100%)" :
-            "linear-gradient(135deg, #00ff88 0%, #00cc6a 100%)",
+            useReframe ?
+              "linear-gradient(135deg, #9C27B0 0%, #7B1FA2 100%)" :
+              "linear-gradient(135deg, #DFBBFE 0%, #C8A2FE 100%)",
           color: (selectedFiles.length === 0 || isProcessing) ? "#666" : "#000",
           border: "none",
           cursor: (selectedFiles.length === 0 || isProcessing) ? "not-allowed" : "pointer",
@@ -859,17 +926,17 @@ export default function SmartCrop({ onResults, onProcessingChange }: SmartCropPr
           marginBottom: 32
         }}
       >
-        {isExportingPSD ? 'EXPORTING PSD...' :
+        {false ? 'EXPORTING PSD...' :
          isProcessing ?
           `PROCESSING ${selectedFiles.length} IMAGE${selectedFiles.length > 1 ? 'S' : ''}...` :
           selectedFiles.length > 0 ?
-            `CROP ${selectedFiles.length} IMAGE${selectedFiles.length > 1 ? 'S' : ''}` :
-            'SELECT IMAGES TO CROP'
+            `${useReframe ? '🎯 AI REFRAME' : 'CROP'} ${selectedFiles.length} IMAGE${selectedFiles.length > 1 ? 'S' : ''}` :
+            useReframe ? 'SELECT IMAGES TO AI REFRAME' : 'SELECT IMAGES TO CROP'
         }
       </button>
 
-      {/* PSD Export Section */}
-      {originalImages.length > 0 && cropMetadata.length > 0 && (
+      {/* PSD Export Section - Removed */}
+      {false && (
         <div style={{
           marginBottom: 24,
           padding: "20px",
@@ -996,13 +1063,13 @@ export default function SmartCrop({ onResults, onProcessingChange }: SmartCropPr
           lineHeight: 1.5
         }}>
           <div>
-            <div style={{ color: "#00ff88", fontWeight: 600, marginBottom: 4 }}>🎨 Detection</div>
+            <div style={{ color: "#DFBBFE", fontWeight: 600, marginBottom: 4 }}>🎨 Detection</div>
             <div>• {dualFocalPoints ? 'Person + Object detection' : 'Single focal point'}</div>
             <div>• {protectFaces ? 'Face priority' : 'Standard detection'}</div>
             <div>• {consistentCrop ? 'Batch consistency' : 'Individual crops'}</div>
           </div>
           <div>
-            <div style={{ color: "#00ff88", fontWeight: 600, marginBottom: 4 }}>⚙️ Smart Features</div>
+            <div style={{ color: "#DFBBFE", fontWeight: 600, marginBottom: 4 }}>⚙️ Smart Features</div>
             <div>• Cross-image consistency</div>
             <div>• Dual focal points</div>
             <div>• Adjustable sensitivity</div>
@@ -1012,13 +1079,12 @@ export default function SmartCrop({ onResults, onProcessingChange }: SmartCropPr
           <div style={{
             marginTop: 16,
             padding: 12,
-            background: "rgba(0,255,136,0.1)",
+            background: "rgba(223,187,254,0.1)",
             borderRadius: 8,
             fontSize: 11,
-            color: "#00ff88"
+            color: "#DFBBFE"
           }}>
-            💡 Image {selectedImageIndex + 1} selected - Green overlay shows detected crop area
-            <br/>🎨 Click &quot;EXPORT SELECTED PSD&quot; below to get editable Photoshop file
+            💡 Image {selectedImageIndex + 1} selected - Purple overlay shows detected crop area
           </div>
         )}
 
@@ -1067,6 +1133,102 @@ export default function SmartCrop({ onResults, onProcessingChange }: SmartCropPr
           }
         }
       `}</style>
+
+      {/* Preview Modal */}
+      {previewModalIndex !== null && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0, 0, 0, 0.9)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+            padding: 20
+          }}
+          onClick={() => setPreviewModalIndex(null)}
+        >
+          <div
+            style={{
+              position: "relative",
+              maxWidth: "90vw",
+              maxHeight: "90vh",
+              background: "#111",
+              borderRadius: 12,
+              overflow: "hidden",
+              border: "1px solid #333"
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Close button */}
+            <button
+              onClick={() => setPreviewModalIndex(null)}
+              style={{
+                position: "absolute",
+                top: 10,
+                right: 10,
+                width: 32,
+                height: 32,
+                background: "rgba(0, 0, 0, 0.8)",
+                color: "#fff",
+                border: "none",
+                borderRadius: "50%",
+                cursor: "pointer",
+                fontSize: 16,
+                fontWeight: 600,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                zIndex: 1001,
+                transition: "all 0.2s ease"
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = "rgba(255, 0, 0, 0.8)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "rgba(0, 0, 0, 0.8)";
+              }}
+            >
+              ×
+            </button>
+
+            {/* Image */}
+            <img
+              src={previews[previewModalIndex]}
+              alt={`Preview ${previewModalIndex + 1}`}
+              style={{
+                width: "100%",
+                height: "100%",
+                maxWidth: "90vw",
+                maxHeight: "90vh",
+                objectFit: "contain"
+              }}
+            />
+
+            {/* Image info */}
+            <div
+              style={{
+                position: "absolute",
+                bottom: 0,
+                left: 0,
+                right: 0,
+                background: "linear-gradient(transparent, rgba(0, 0, 0, 0.8))",
+                color: "#fff",
+                padding: "20px 20px 10px",
+                fontSize: 12,
+                fontWeight: 500
+              }}
+            >
+              Image {previewModalIndex + 1} of {previews.length}
+              <br />
+              <span style={{ color: "#DFBBFE" }}>
+                {selectedFiles[previewModalIndex]?.name}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

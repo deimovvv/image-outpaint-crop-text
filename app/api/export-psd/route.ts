@@ -181,7 +181,6 @@ function createFocalPointGuide(x: number, y: number, canvasWidth: number, canvas
     right: x + Math.ceil(guideSize/2),
     bottom: y + Math.ceil(guideSize/2),
     opacity: 180,
-    visible: true,
     blendMode: 'normal',
     canvas: guideCanvas as any
   };

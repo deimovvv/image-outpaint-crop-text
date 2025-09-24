@@ -47,14 +47,20 @@ export default function ResultsGrid({ results, mode }: ResultsGridProps) {
         borderRadius: 8,
         border: "1px dashed #333"
       }}>
-        <div style={{ fontSize: 48, marginBottom: 16 }}>📸</div>
-        <div style={{ fontSize: 16, marginBottom: 8 }}>Sin resultados aún</div>
+        <div style={{
+          fontSize: 32,
+          marginBottom: 16,
+          color: "#666",
+          fontWeight: 300
+        }}>📷</div>
+        <div style={{ fontSize: 16, marginBottom: 8 }}>No results yet</div>
         <div style={{ fontSize: 12 }}>
-          Procesa imágenes con {
+          Process images with {
             mode === "smart-crop" ? "Smart Crop" :
             mode === "outpaint" ? "Outpaint" :
+            mode === "background-removal" ? "Background Removal" :
             "Text Overlay"
-          } para ver los resultados aquí
+          } to see results here
         </div>
       </div>
     );

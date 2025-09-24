@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a Next.js application called **AI IMAGE STUDIO** for comprehensive AI-powered image processing featuring multiple functionalities: Smart Crop (intelligent cropping), Outpaint (AI expansion/reframing), Background Removal, and Text Overlay (coming soon). Built with App Router architecture, TypeScript, and @fal-ai/client integration supporting multiple AI models.
+This is a Next.js application called **AI IMAGE STUDIO** for comprehensive AI-powered image processing featuring multiple functionalities: Smart Crop (intelligent cropping with AI Reframe), Outpaint (AI expansion/reframing), Background Removal, and Text Overlay (coming soon). Built with App Router architecture, TypeScript, and @fal-ai/client integration supporting multiple AI models. Features Monks branding with custom color palette and elegant loader.
 
 ## Environment Setup
 
@@ -24,7 +24,9 @@ This is a Next.js application called **AI IMAGE STUDIO** for comprehensive AI-po
 - **Runtime**: Node.js runtime (not Edge) for API routes to handle large files
 - **File Upload**: Uses multipart/form-data to avoid JSON base64 bloat
 - **Image Processing**: Client-side canvas manipulation and server-side Sharp processing
-- **AI Services**: Multi-model AI support (Seedream, FLUX Fill, Luma Photon, Qwen Edit+, Bria Background Removal)
+- **AI Services**: Multi-model AI support (Seedream, FLUX Fill, Luma Photon, Bria Background Removal, FAL Image Reframe)
+- **Branding**: Monks color palette with mauve (#DFBBFE) and neutral (#EAE8E4) colors
+- **UI/UX**: Elegant loader, documentation dropdown, minimalist icons
 
 ## Key Dependencies
 
@@ -38,49 +40,62 @@ This is a Next.js application called **AI IMAGE STUDIO** for comprehensive AI-po
 
 ### Smart Crop Component
 - **Location**: `app/components/SmartCrop.tsx`
-- **Purpose**: Intelligent cropping with specialized person/object detection
-- **API**: `app/api/smart-crop/route.ts` using Sharp for server-side processing
-- **Dual Algorithms**:
-  - **Person Detection**: 5-algorithm skin detection + facial feature analysis
-  - **Object Detection**: Contrast/edge-based subject detection
-- **Features**:
+- **Purpose**: Dual-mode intelligent cropping system with AI Reframe capability
+- **API**: `app/api/smart-crop/route.ts` using Sharp and FAL AI
+- **Two Modes**:
+  - **Traditional Smart Crop**: Server-side Sharp processing with person/object detection
+  - **AI Reframe**: FAL AI `fal-ai/image-editing/reframe` for intelligent aspect ratio adjustment
+- **Traditional Features**:
   - Protect Faces mode with 95%+ person detection accuracy
   - Consistent batch cropping with focal point memory
   - Dual focal points (person + secondary object)
   - Multi-ethnic skin tone support (YCbCr + RGB analysis)
-  - Real-time progress tracking and intelligent logging
+- **AI Reframe Features**:
+  - Uses outpainting when expansion needed
+  - Automatically handles both cropping and expanding
+  - Preserves subject position and composition
+  - No manual controls needed (simplified interface)
+- **UI**: Toggle between modes with clear visual feedback, Monks branding integration
 
 ### Outpaint Component
 - **Location**: `app/components/Outpaint.tsx`
 - **Purpose**: AI-powered image expansion and reframing with quad model support
 - **API**: `app/api/outpaint/route.ts` (unified endpoint for all models)
-- **Models**:
-  - Seedream (creative expansion)
-  - FLUX Fill (precise mask-based outpainting)
-  - Luma Photon (intelligent reframing)
-  - Qwen Edit+ (advanced multi-image editing)
-- **Features**: Model switching, gravity positioning, auto-prompts, protective recomposition
+- **Models** (Qwen Edit+ removed):
+  - **Seedream**: Creative expansion with artistic interpretation
+  - **FLUX Fill**: Best for preserving faces/objects but inconsistent outpainting
+  - **Luma Photon**: Most consistent outpainting, no prompts/gravity needed
+- **Features**: Model switching, gravity positioning (hidden for Luma Photon), auto-prompts, subtle upload icons
+- **Model-Specific UI**: Gravity controls automatically hidden when Luma Photon selected
 
 ### Background Removal Component
 - **Location**: `app/components/BackgroundRemoval.tsx`
 - **Purpose**: AI-powered background removal with transparency
 - **API**: `app/api/background-removal/route.ts` using Bria AI
-- **Features**: Batch processing, high-quality edge preservation, transparent PNG output
+- **Features**: Batch processing, high-quality edge preservation, transparent PNG output, subtle upload icons
 
 ### Coming Soon Component
 - **Location**: `app/components/ComingSoon.tsx`
 - **Purpose**: Placeholder for Text Overlay functionality
 - **Status**: Development in progress
 
-### Settings Component (Hidden)
-- **Location**: `app/components/Settings.tsx`
-- **Purpose**: API key configuration (temporarily disabled)
-- **Features**: Custom API key management, validation, localStorage persistence
+### Documentation Component (Replaces Settings)
+- **Location**: Integrated in `app/page.tsx` header
+- **Purpose**: Comprehensive usage guide for all tools
+- **Features**: Dropdown with detailed explanations, model comparisons, best practices
+- **Access**: "DOCS" button in top-right corner with Monks branding
+
+### Loader Component
+- **Location**: `app/components/Loader.tsx`
+- **Purpose**: Elegant loading screen on app startup
+- **Features**: 2-second animated loader with Monks colors, spinning rings, pulsing center, bouncing dots
+- **Styling**: Matches Monks brand palette (#DFBBFE, #EAE8E4, #0A0A0A)
 
 ### Results Grid Component
 - **Location**: `app/components/ResultsGrid.tsx`
 - **Purpose**: Display, preview and download processed images
-- **Features**: Modal view (85vh max), batch download, responsive grid
+- **Features**: Modal view (85vh max), batch download, responsive grid, "No results yet" message in English
+- **Icons**: Subtle camera icon (📷) instead of bold flash camera
 
 ### Canvas Utilities
 - **Location**: `src/lib/seedream-canvas.ts`
@@ -92,7 +107,9 @@ This is a Next.js application called **AI IMAGE STUDIO** for comprehensive AI-po
 
 ### Main Layout
 - **Location**: `app/page.tsx`
-- **Features**: Multi-tab interface (Smart Crop, Outpaint, Background Removal, Text Overlay), unified results display, settings dropdown (hidden)
+- **Features**: Multi-tab interface (Smart Crop, Outpaint, Background Removal, Text Overlay), unified results display, documentation dropdown
+- **Branding**: Monks color scheme with mauve accent for Smart Crop, elegant loader on startup
+- **Header**: "AI IMAGE STUDIO" title with "DOCS" button, no pink gradient background
 
 ## File Structure
 
@@ -100,30 +117,31 @@ This is a Next.js application called **AI IMAGE STUDIO** for comprehensive AI-po
 app/
 ├── api/
 │   ├── outpaint/
-│   │   └── route.ts         # Unified API (4 models: Seedream, FLUX Fill, Luma Photon, Qwen Edit+)
+│   │   └── route.ts         # Unified API (3 models: Seedream, FLUX Fill, Luma Photon)
 │   ├── background-removal/
 │   │   └── route.ts         # Background removal API (Bria AI)
 │   ├── smart-crop/
-│   │   └── route.ts         # Smart cropping with Sharp
+│   │   └── route.ts         # Smart cropping with Sharp + AI Reframe with FAL
 │   ├── validate-key/
 │   │   └── route.ts         # API key validation (disabled)
 │   └── export-psd/
-│       └── route.ts         # PSD export functionality
+│       └── route.ts         # PSD export functionality (disabled)
 ├── components/
-│   ├── SmartCrop.tsx        # Intelligent cropping UI
-│   ├── Outpaint.tsx         # AI expansion/reframing UI (4 models)
+│   ├── SmartCrop.tsx        # Dual-mode cropping UI (Traditional + AI Reframe)
+│   ├── Outpaint.tsx         # AI expansion/reframing UI (3 models)
 │   ├── BackgroundRemoval.tsx # Background removal UI
 │   ├── ComingSoon.tsx       # Text overlay placeholder
-│   ├── Settings.tsx         # API configuration (hidden)
+│   ├── Loader.tsx           # Elegant startup loader
+│   ├── Settings.tsx         # API configuration (disabled)
 │   └── ResultsGrid.tsx      # Results display and download
-├── page.tsx                 # Main multi-tab interface
+├── page.tsx                 # Main multi-tab interface with Monks branding
 └── globals.css              # Global styles
 
 src/lib/
 ├── seedream-canvas.ts       # Canvas utilities for AI models
 ├── auto-prompts.ts          # Automatic prompt generation
 ├── mask.ts                  # Mask generation utilities
-├── psd-export.ts           # PSD export functionality
+├── psd-export.ts           # PSD export functionality (disabled)
 ├── subject-mask.ts         # Subject detection and masking
 ├── api-config.ts           # API configuration utilities (disabled)
 └── use-api-client.ts       # API client hook (disabled)
@@ -131,8 +149,9 @@ src/lib/
 
 ## Workflows
 
-### Smart Crop Workflow
+### Smart Crop Workflow (Dual Mode)
 
+**Traditional Smart Crop Mode:**
 **Person Detection Mode (Protect Faces ON):**
 1. User uploads image(s) and selects target ratio + enables Protect Faces
 2. Server runs specialized person detection algorithm:
@@ -154,27 +173,31 @@ src/lib/
 3. Intelligent cropping preserves detected subjects/products
 4. Results optimized for e-commerce, logos, architecture, graphics
 
-**Advanced Features:**
-- **Consistent Crop**: Same focal point across batch (memory-based)
-- **Dual Focal Points**: Detects person + secondary object, includes both
-- **Real-time logging**: Clear detection feedback with confidence scores
-- **Progress tracking**: Batch processing with individual image status
+**AI Reframe Mode:**
+1. User toggles AI Reframe (traditional controls disabled)
+2. User uploads image(s) and selects target aspect ratio
+3. Server sends to FAL AI `fal-ai/image-editing/reframe` endpoint
+4. AI intelligently:
+   - **Crops** when target ratio can be achieved by cropping
+   - **Uses outpainting** when expansion is needed for target ratio
+   - **Preserves subject** position and composition automatically
+5. Results are naturally expanded/cropped with AI intelligence
+6. Toggle back to traditional mode re-enables all Smart Crop controls
 
 ### Outpaint Workflow
-1. User uploads image(s) and selects AI model (Seedream/FLUX Fill/Luma Photon/Qwen Edit+)
-2. Client generates appropriate input based on selected model:
+1. User uploads image(s) and selects AI model (Seedream/FLUX Fill/Luma Photon)
+2. **Model Selection UI**: Gravity controls automatically hidden when Luma Photon selected
+3. Client generates appropriate input based on selected model:
    - **Seedream**: Creative canvas with context hints
    - **FLUX Fill**: Clean base image + precise black/white mask
-   - **Luma Photon**: Original image only (no canvas needed)
-   - **Qwen Edit+**: Original image + canvas for context
-3. Files sent to `/api/outpaint` with model parameter
-4. API routes to appropriate AI service:
+   - **Luma Photon**: Original image only (no canvas/gravity needed)
+4. Files sent to `/api/outpaint` with model parameter
+5. API routes to appropriate AI service:
    - **Seedream**: `fal-ai/bytedance/seedream/v4/edit`
    - **FLUX Fill**: `fal-ai/flux-pro/v1/fill`
    - **Luma Photon**: `fal-ai/luma-photon/reframe`
-   - **Qwen Edit+**: `fal-ai/qwen-image-edit-plus`
-5. Optional protective recomposition for Seedream results
-6. Results displayed with download options
+6. Optional protective recomposition for Seedream results
+7. Results displayed with download options
 
 ### Background Removal Workflow
 1. User uploads image(s)
@@ -186,14 +209,16 @@ src/lib/
 
 ## AI Model Comparison
 
-| Feature | Seedream | FLUX Fill | Luma Photon | Qwen Edit+ | Bria BG Removal |
-|---------|----------|-----------|-------------|------------|-----------------|
-| **Input** | Canvas with hints | Base + Mask | Original image | Multi-image | Original image |
-| **Control** | Prompt-based | Mask-based | Aspect ratio | Prompt + Multi-image | Automatic |
-| **Creativity** | High | Controlled | Medium | High | N/A |
-| **Preservation** | ~70% (post-process) | 100% (native) | 100% (reframe) | Variable | Subject only |
-| **Use Case** | Natural blending | Precise outpainting | Smart reframing | Advanced editing | Background removal |
-| **Output** | Expanded image | Outpainted image | Reframed image | Edited image | Transparent PNG |
+| Feature | Seedream | FLUX Fill | Luma Photon | FAL Reframe | Bria BG Removal |
+|---------|----------|-----------|-------------|-------------|-----------------|
+| **Input** | Canvas with hints | Base + Mask | Original image | Original image | Original image |
+| **Control** | Prompt-based | Mask-based | Aspect ratio only | Aspect ratio only | Automatic |
+| **Creativity** | High artistic | Controlled precise | Medium consistent | Smart adaptive | N/A |
+| **Preservation** | ~70% (post-process) | Best for faces/objects | 100% (most consistent) | 100% (intelligent) | Subject only |
+| **Consistency** | Variable | Inconsistent outpainting | Most reliable | Very reliable | High |
+| **Use Case** | Creative expansion | Face/object preservation | Reliable outpainting | Smart crop/expand | Background removal |
+| **Best For** | Artistic results | People/portraits | General outpainting | Aspect ratio changes | Transparent PNGs |
+| **UI Controls** | Full gravity/prompts | Full gravity/prompts | No gravity needed | No controls needed | None |
 
 ## Development Notes
 
@@ -204,8 +229,11 @@ src/lib/
 - **Progress Tracking**: Real-time progress bars for batch operations
 - **Responsive Design**: Modal images sized to 85vh/85vw max
 - **Error Handling**: Comprehensive logging and user feedback
-- **Minimalist UI**: Clean, professional interface without distracting icons
-- **Settings**: API configuration temporarily hidden (can be enabled by changing `false` to `true` in header)
+- **Monks Branding**: Custom color palette (#DFBBFE mauve, #EAE8E4 neutral, #0A0A0A dark)
+- **Minimalist UI**: Clean, professional interface with subtle icons (⬆ upload, 📷 camera)
+- **Documentation**: Comprehensive usage guide accessible via "DOCS" button (replaces Settings)
+- **Loader**: Elegant 2-second startup animation with Monks colors
+- **PSD Export**: Functionality disabled (removed from Smart Crop interface)
 
 ## Smart Crop Algorithm
 
@@ -289,17 +317,56 @@ When "Protect Faces" is disabled, uses general subject detection:
 
 ## Color Scheme
 
+**Monks Branding Palette:**
+- **Primary**: Mauve (#DFBBFE) - Main accent color
+- **Secondary**: Light Purple (#C8A2FE) - Gradients and highlights
+- **Neutral**: Light Gray (#EAE8E4) - Main text color
+- **Dark**: Black (#0A0A0A) - Main background
+- **Smart Crop**: Mauve (#DFBBFE) - Updated from green
+
+**Model-Specific Colors:**
 - **Seedream**: Orange (#FF6B35)
 - **FLUX Fill**: Green (#4CAF50)
 - **Luma Photon**: Purple (#9C27B0)
-- **Qwen Edit+**: Pink (#E91E63)
 - **Background Removal**: Purple (#8B5CF6)
 - **Text Overlay**: Gray (Coming Soon)
 
 ## Features Status
 
-- ✅ **Smart Crop**: Fully implemented
-- ✅ **Outpaint**: 4 models fully implemented
-- ✅ **Background Removal**: Fully implemented
+- ✅ **Smart Crop**: Fully implemented (Traditional + AI Reframe modes)
+- ✅ **Outpaint**: 3 models fully implemented (Seedream, FLUX Fill, Luma Photon)
+- ✅ **Background Removal**: Fully implemented with Bria AI
+- ✅ **Documentation**: Comprehensive guide with model comparisons
+- ✅ **Monks Branding**: Complete UI overhaul with custom color palette
+- ✅ **Loader**: Elegant startup animation
 - ⏳ **Text Overlay**: Coming soon
-- 🔒 **Settings**: Implemented but hidden (API key configuration)
+- ❌ **PSD Export**: Removed from Smart Crop (functionality disabled)
+- ❌ **Qwen Edit+**: Removed from Outpaint options
+
+## Recent Major Updates
+
+### AI Reframe Integration (Smart Crop)
+- **New Mode**: Added AI Reframe as alternative to traditional Smart Crop
+- **Toggle System**: Users can switch between Traditional Smart Crop and AI Reframe
+- **Smart Logic**: AI Reframe uses outpainting when expansion needed, cropping when possible
+- **UI Changes**: Traditional controls disabled when AI Reframe active, clear toggle feedback
+- **API**: Uses `fal-ai/image-editing/reframe` endpoint
+
+### Monks Branding Implementation
+- **Color Overhaul**: Replaced all green accents (#00ff88) with Monks mauve (#DFBBFE)
+- **Typography**: System sans-serif fonts with proper weights (500-700)
+- **Header**: Clean title without gradient background
+- **Consistent Palette**: Applied throughout all components and states
+
+### UI/UX Improvements
+- **Elegant Loader**: 2-second animated startup with spinning rings and bouncing dots
+- **Subtle Icons**: Refined upload (⬆) and camera (📷) icons
+- **Documentation**: Replaced Settings with comprehensive "DOCS" dropdown
+- **Model-Specific UI**: Gravity controls auto-hide for Luma Photon
+- **English Interface**: "No results yet" message updated
+
+### Functionality Cleanup
+- **PSD Export**: Completely removed from Smart Crop interface
+- **Qwen Edit+**: Removed from Outpaint model options
+- **Model Count**: Outpaint reduced from 4 to 3 models (cleaner, more focused)
+- **Error Resolution**: Fixed all state management issues related to removed features
